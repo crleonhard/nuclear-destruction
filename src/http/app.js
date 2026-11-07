@@ -16,7 +16,7 @@ import {
   startGame, submitSheet, getPackage, getSheetView, dryRunSheet, getHistory, getReplay,
 } from '../app/pipeline.js';
 import {
-  createGame, joinGame, pickCountry, leaveGame, setStartPopulation, getLobby, myGames,
+  createGame, joinGame, pickCountry, leaveGame, setStartPopulation, getLobby, myGames, addAiPlayer, removeAiPlayer,
 } from '../app/lobby.js';
 import { openapi } from './openapi.js';
 
@@ -213,6 +213,22 @@ export function createApp({
     const id = gameId(params);
     if (!Number.isInteger(body.userId)) throw err(422, 'NOT_INTEGER', 'userId must be a whole number', 'userId');
     const r = await setStartPopulation(store, { gameId: id, userId, targetUserId: body.userId, population: body.population ?? null });
+    if (r.ok) notify(id, { type: 'lobby_changed' });
+    return r;
+  });
+
+  route('POST', '/api/v1/games/:id/ai', async ({ params, userId, body }) => {
+    const id = gameId(params);
+    const r = await addAiPlayer(store, { gameId: id, userId, persona: body.persona ?? null });
+    if (r.ok) notify(id, { type: 'lobby_changed' });
+    return r.ok ? { status: 201, body: { userId: r.userId } } : r;
+  });
+
+  route('DELETE', '/api/v1/games/:id/ai/:aiUserId', async ({ params, userId }) => {
+    const id = gameId(params);
+    const aiUserId = Number(params.aiUserId);
+    if (!Number.isSafeInteger(aiUserId) || aiUserId < 1) throw err(404, 'NOT_FOUND', 'No AI player with that id in this game');
+    const r = await removeAiPlayer(store, { gameId: id, userId, aiUserId });
     if (r.ok) notify(id, { type: 'lobby_changed' });
     return r;
   });

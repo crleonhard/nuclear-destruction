@@ -51,7 +51,7 @@ test('spec: operations are complete and consistent', () => {
     }
     if (op.requestBody) assert.ok(op.requestBody.content['application/json'], `${label}: request body`);
   }
-  assert.equal(ids.size, 24);
+  assert.equal(ids.size, 26);
 });
 
 test('spec: documented examples conform to their schemas', () => {
@@ -138,11 +138,11 @@ async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 
   const base = `http://127.0.0.1:${server.address().port}`;
 
   /** Calls a documented operation and fails unless the status, content type and body are all documented. */
-  async function call(token, method, specPath, { id, body, raw, headers = {} } = {}) {
+  async function call(token, method, specPath, { id, aiUserId, body, raw, headers = {} } = {}) {
     const op = openapi.paths[specPath]?.[method.toLowerCase()];
     assert.ok(op, `${method} ${specPath} is not in the spec`);
     const payload = raw ?? (body === undefined ? undefined : JSON.stringify(body));
-    const res = await fetch(base + specPath.replace('{id}', id), {
+    const res = await fetch(base + specPath.replace('{id}', id).replace('{aiUserId}', aiUserId), {
       method,
       headers: {
         ...(token ? { authorization: `Bearer ${token}` } : {}),
@@ -389,6 +389,54 @@ scenario('conformance: email sign-in responses and requests match the spec', asy
     const r = await broken.call(null, 'POST', '/api/v1/auth/email-link', { body: { email: `b.${tag}@example.org` } });
     assert.equal(r.status, 503);
   } finally { await broken.close(); }
+});
+
+scenario('conformance: AI players in the lobby match the spec', async () => {
+  const ctx = await boot();
+  const { call } = ctx;
+  try {
+    const [a, b] = [await ctx.signup('Ann'), await ctx.signup('Ben')];
+    assert.equal((await call(a.token, 'POST', G, { body: { aiPlayers: 9 } })).status, 422);
+    assert.equal((await call(a.token, 'POST', G, { body: { aiPlayers: 'two' } })).status, 422);
+    const created = await call(a.token, 'POST', G, { body: { aiPlayers: 2 } });
+    assert.equal(created.status, 201);
+    const id = created.body.gameId;
+    let lobby = (await call(b.token, 'GET', P('lobby'), { id })).body;
+    assert.equal(lobby.seats.length, 3);
+    assert.equal(lobby.seats.filter((x) => x.ai).length, 2);
+    assert.ok(lobby.seats.filter((x) => x.ai).every((x) => ['HAWK', 'DIPLOMAT', 'OPPORTUNIST'].includes(x.ai)));
+
+    const AI = `${G}/{id}/ai`;
+    const AI_ONE = `${G}/{id}/ai/{aiUserId}`;
+    assert.equal((await call(b.token, 'POST', AI, { id, body: {} })).status, 403);
+    assert.equal((await call(a.token, 'POST', AI, { id, body: { persona: 'PACIFIST' } })).status, 422);
+    assert.equal((await call(a.token, 'POST', AI, { id: 99999, body: {} })).status, 404);
+    const added = await call(a.token, 'POST', AI, { id, body: { persona: 'HAWK' } });
+    assert.equal(added.status, 201);
+    const noBody = await call(a.token, 'POST', AI, { id });                 // the body is optional: a random style
+    assert.equal(noBody.status, 201);
+    lobby = (await call(a.token, 'GET', P('lobby'), { id })).body;
+    assert.equal(lobby.seats.find((x) => x.userId === added.body.userId).ai, 'HAWK');
+    assert.equal(lobby.seats.length, 5);
+
+    assert.equal((await call(b.token, 'DELETE', AI_ONE, { id, aiUserId: added.body.userId })).status, 403);
+    assert.equal((await call(a.token, 'DELETE', AI_ONE, { id, aiUserId: b.id })).status, 404);
+    assert.equal((await call(a.token, 'DELETE', AI_ONE, { id, aiUserId: 'abc' })).status, 404);
+    assert.equal((await call(a.token, 'DELETE', AI_ONE, { id, aiUserId: added.body.userId })).status, 200);
+    assert.equal((await call(a.token, 'GET', P('lobby'), { id })).body.seats.length, 4);
+
+    while ((await call(a.token, 'GET', P('lobby'), { id })).body.seats.length < 9) assert.equal((await call(a.token, 'POST', AI, { id, body: {} })).status, 201);
+    assert.equal((await call(a.token, 'POST', AI, { id, body: {} })).status, 409);           // full
+
+    assert.equal((await call(a.token, 'POST', P('start'), { id })).status, 200);
+    assert.equal((await call(a.token, 'POST', AI, { id, body: {} })).status, 409);           // started
+    const bot = (await call(a.token, 'GET', P('lobby'), { id })).body.seats.find((x) => x.ai);
+    assert.equal((await call(a.token, 'DELETE', AI_ONE, { id, aiUserId: bot.userId })).status, 409);
+
+    const state = (await call(a.token, 'GET', P('state'), { id })).body;
+    assert.equal(state.public.players.filter((x) => x.ai).length, 8);
+    assert.equal(state.turn.submitted, 8, 'all eight AIs submitted at once');
+  } finally { await ctx.close(); }
 });
 
 scenario('conformance: the flow exercised every operation successfully', () => {

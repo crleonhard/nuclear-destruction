@@ -134,6 +134,21 @@ Once war is declared, the next turn is a battle turn, then normal, battle, and s
   sheet, or when the deadline passes. The only chance in the game is the auction tie-break, drawn from a seed
   that is kept secret until the game ends so that the whole game can be replayed exactly.
 
+### AI players
+- **Any seat can be an AI.** The creator can seat up to 8 AI players when creating a game, and add or remove them in the lobby
+  (never after the game starts). They count towards the 3 to 9 players, take a random free country like any player who has not
+  chosen one, and the creator can set their starting population like anyone's.
+- **An AI follows every rule a person does.** It uses the same sheet, the same limits and the same validation, and its orders stay
+  hidden until the turn resolves. It sees only what a person in its seat sees (its own assets, last turn's reports, the battle result,
+  and the public table of countries and minors). Who is an AI, and its play style, is public.
+- **An AI never misses a turn,** so it is never forfeited. It sends no messages or news, and gives nothing to other players.
+- **AI players move at once.** They submit as soon as a turn opens, so the turn resolves early as soon as every person has submitted.
+  When no living person is left (they were eliminated or forfeited), nobody remains to wait for: the server plays out all the
+  remaining turns at once, without waiting for any turn deadline, until the game ends. As a safety net against a game that never
+  ends, one pass plays at most 1,000 turns; if that is ever reached the game waits for the next deadline and carries on from there.
+- **Play styles:** Hawk (builds fast, declares war early, fires everything), Diplomat (grows first, courts many minors, defends
+  heavily, strikes late), Opportunist (balanced; waits until it looks at least as strong as the rivals it has spied on).
+
 ## 3. Assumptions made without being asked
 
 These follow from how the game was built and can be changed:
@@ -146,5 +161,7 @@ These follow from how the game was built and can be changed:
 - **A draft only saves if it is valid.** An invalid sheet is rejected with every problem listed, not stored.
 - **A forfeit takes effect after the missed turn resolves**, so that turn still plays out with default orders.
 - **Lobby limits:** the creator joins automatically and cannot leave; a turn lasts 1-168 hours (default 24).
+- **AI strength was not specified.** The AI plays sensibly and legally but is not an expert; its styles are meant to give varied, plausible
+  opponents. They are tunable numbers in `src/ai/personas.js`.
 - **A diplomacy convenience:** the sheet editor may offer "send the same text to everyone", which fills one
   message per other living player. It changes no rule.

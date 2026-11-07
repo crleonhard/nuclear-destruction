@@ -139,8 +139,8 @@ class MemTx {
   }
 
   // ── users and lobby ──
-  async createUser(displayName) {
-    const u = { id: this.id(), displayName };
+  async createUser(displayName, { aiPersona = null } = {}) {
+    const u = { id: this.id(), displayName, ...(aiPersona ? { aiPersona } : {}) };
     this.d.users.push(u);
     return clone(u);
   }
@@ -184,6 +184,43 @@ class MemTx {
 
   async getUsers(ids) {
     return Object.fromEntries(this.d.users.filter((u) => ids.includes(u.id)).map((u) => [u.id, u.displayName]));
+  }
+
+  // ── AI players (mirrors migration 008) ──
+  /** { [userId]: persona } for those of `ids` that are AI players; people are left out. */
+  async getAiPersonas(ids) {
+    return Object.fromEntries(this.d.users.filter((u) => u.aiPersona && ids.includes(u.id)).map((u) => [u.id, u.aiPersona]));
+  }
+
+  /** Removes an AI player's account (never a person's). Call after its seat is deleted. */
+  async deleteAiUser(userId) {
+    const before = this.d.users.length;
+    this.d.users = this.d.users.filter((u) => !(u.id === userId && u.aiPersona));
+    return before - this.d.users.length;
+  }
+
+  /** A player's own sheets from turns before `beforeTurn`, oldest first: [{ turnNumber, payload }]. */
+  async listOwnSheets({ gameId, playerId, beforeTurn }) {
+    return clone(this.d.sheets
+      .filter((s) => s.gameId === gameId && s.playerId === playerId)
+      .map((s) => ({ turnNumber: this.d.turns.find((t) => t.id === s.turnId)?.number, payload: s.payload }))
+      .filter((s) => s.turnNumber != null && s.turnNumber < beforeTurn)
+      .sort((a, b) => a.turnNumber - b.turnNumber));
+  }
+
+  /** Games with an open turn in which a living AI player has not yet submitted a sheet. */
+  async listGamesAwaitingAi() {
+    const out = [];
+    for (const g of this.d.games) {
+      if (g.status !== 'ACTIVE') continue;
+      const turn = this.d.turns.find((t) => t.gameId === g.id && t.number === g.turnNumber && t.status === 'OPEN');
+      if (!turn) continue;
+      const pending = this.d.players.some((p) => p.gameId === g.id && p.alive
+        && this.d.users.some((u) => u.id === p.userId && u.aiPersona)
+        && !this.d.sheets.some((s) => s.turnId === turn.id && s.playerId === p.id));
+      if (pending) out.push(g.id);
+    }
+    return out;
   }
 
   async insertGame({ creatorId, seed, turnDeadlineHours, forfeitAfterN }) {

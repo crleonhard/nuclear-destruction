@@ -13,6 +13,7 @@ markers split into separate `.up.sql` / `.down.sql` files).
 | 005 | `messages`, `world_news`, `reports`, `battle_results`, append-only `events` |
 | 006 | Privacy views: public players/minors, inbox, news, replay |
 | 007 | `users.email` (unique, lower-case) and `login_links` (hashed, single-use, expiring email sign-in links) |
+| 008 | `users.ai_persona`: server-controlled AI players (a persona and no email) |
 
 ## Mapping to the resolver
 

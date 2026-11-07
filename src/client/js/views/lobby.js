@@ -1,5 +1,5 @@
 import { h, mount } from '../dom.js';
-import { label, plural } from '../format.js';
+import { label, plural, AI_STYLES, aiStyleLabel } from '../format.js';
 
 export function createLobbyView({ ctx, gameId, resync }) {
   const { api, session, flash } = ctx;
@@ -21,6 +21,22 @@ export function createLobbyView({ ctx, gameId, resync }) {
     const done = () => { button.textContent = 'Copied'; setTimeout(() => { button.textContent = 'Copy'; }, 1500); };
     if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(done, () => { input.select(); });
     else { input.select(); }
+  }
+
+  function aiCard() {
+    const { game, seats } = data.lobby;
+    const full = seats.length >= game.limits.maxPlayers;
+    const style = h('select', { id: 'ai-style', disabled: busy || full, 'aria-label': 'Play style' },
+      h('option', { value: '' }, 'Random style'),
+      Object.entries(AI_STYLES).map(([key, v]) => h('option', { value: key }, v.label)));
+    return h('section', { class: 'card' },
+      h('h2', {}, 'AI players'),
+      h('p', { class: 'hint' }, 'An AI takes a seat, gets a random country if the others do not claim it, and sends in its orders by itself each turn. It sees only what a player in its seat would see. It counts towards the players you need.'),
+      h('div', { class: 'rowform' },
+        h('label', { class: 'field', for: 'ai-style' }, h('span', {}, 'Play style'), style),
+        h('button', { type: 'button', disabled: busy || full, onClick: () => act(() => api.post(`${base}/ai`, style.value ? { persona: style.value } : {})) }, 'Add AI player')),
+      full ? h('p', { class: 'hint' }, 'The game is full.') : null,
+      h('dl', { class: 'styles' }, Object.values(AI_STYLES).flatMap((v) => [h('dt', {}, v.label), h('dd', {}, v.blurb)])));
   }
 
   function render() {
@@ -55,7 +71,9 @@ export function createLobbyView({ ctx, gameId, resync }) {
         h('div', { class: 'scroll' }, h('table', { class: 'data' },
           h('thead', {}, h('tr', {}, h('th', {}, 'Player'), h('th', {}, 'Country'), h('th', { class: 'num' }, 'Starting population (millions)'))),
           h('tbody', {}, seats.map((s) => h('tr', {},
-            h('td', {}, s.displayName ?? `Player ${s.userId}`, s.userId === session.user?.id ? h('span', { class: 'chip you' }, 'you') : null, s.userId === game.creatorId ? h('span', { class: 'chip' }, 'creator') : null),
+            h('td', {}, s.displayName ?? `Player ${s.userId}`, s.userId === session.user?.id ? h('span', { class: 'chip you' }, 'you') : null, s.userId === game.creatorId ? h('span', { class: 'chip' }, 'creator') : null,
+              s.ai ? h('span', { class: 'chip ai', title: AI_STYLES[s.ai]?.blurb ?? '' }, `AI · ${aiStyleLabel(s.ai)}`) : null,
+              s.ai && isCreator ? h('button', { type: 'button', class: 'link danger', disabled: busy, 'aria-label': `Remove ${s.displayName}`, onClick: () => act(() => api.del(`${base}/ai/${s.userId}`)) }, 'Remove') : null),
             h('td', {}, s.country ? label(s.country) : h('span', { class: 'muted' }, 'Random at start')),
             h('td', { class: 'num' }, isCreator
               ? h('input', {
@@ -65,6 +83,8 @@ export function createLobbyView({ ctx, gameId, resync }) {
               })
               : (s.startPopulation ?? h('span', { class: 'muted' }, 'random')))))))),
         isCreator ? h('p', { class: 'hint' }, 'Leave a population blank to draw one at random (25 to 99).') : null),
+
+      isCreator ? aiCard() : null,
 
       member ? h('section', { class: 'card' },
         h('h2', {}, 'Choose your country'),

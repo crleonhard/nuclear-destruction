@@ -1,6 +1,6 @@
 // Read-only cards shown beside the sheet. Each takes plain data and returns an element (or null when empty).
 import { h } from '../dom.js';
-import { label, thirdsText, plural } from '../format.js';
+import { label, thirdsText, plural, AI_STYLES, aiStyleLabel } from '../format.js';
 
 const stat = (k, v) => h('div', { class: 'stat' }, h('div', { class: 'v' }, v), h('div', { class: 'k' }, k));
 
@@ -17,7 +17,8 @@ export function playersCard(players, myCountry) {
     h('div', { class: 'scroll' }, h('table', { class: 'data' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Country'), h('th', { class: 'num' }, 'Population (M)'), h('th', {}, 'Status'))),
       h('tbody', {}, players.map((p) => h('tr', {},
-        h('td', {}, label(p.country), p.country === myCountry ? h('span', { class: 'chip you' }, 'you') : null),
+        h('td', {}, label(p.country), p.country === myCountry ? h('span', { class: 'chip you' }, 'you') : null,
+          p.ai ? h('span', { class: 'chip ai', title: AI_STYLES[p.ai]?.blurb ?? '' }, `AI · ${aiStyleLabel(p.ai)}`) : null),
         h('td', { class: 'num' }, p.population),
         h('td', {}, p.alive ? 'In the game' : h('span', { class: 'chip out' }, p.forfeited ? 'Forfeited' : 'Eliminated'))))))));
 }

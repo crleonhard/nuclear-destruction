@@ -1,4 +1,4 @@
-// PostgreSQL implementation of the store contract, matching migrations 001-007.
+// PostgreSQL implementation of the store contract, matching migrations 001-008.
 // Takes any pg-compatible pool (`pool.connect()` -> client with `query`, `release`).
 // Verified against PostgreSQL 16 by the store contract suite and the schema tests (npm run test:db:docker).
 
@@ -197,8 +197,8 @@ class PgTx {
   }
 
   // ── users and lobby ──
-  async createUser(displayName) {
-    const [r] = await this.q('INSERT INTO users (display_name) VALUES ($1) RETURNING id, display_name', [displayName]);
+  async createUser(displayName, { aiPersona = null } = {}) {
+    const [r] = await this.q('INSERT INTO users (display_name, ai_persona) VALUES ($1, $2) RETURNING id, display_name', [displayName, aiPersona]);
     return { id: n(r.id), displayName: r.display_name };
   }
 
@@ -246,6 +246,41 @@ class PgTx {
     if (!ids.length) return {};
     const rows = await this.q('SELECT id, display_name FROM users WHERE id = ANY($1::bigint[])', [ids]);
     return Object.fromEntries(rows.map((r) => [n(r.id), r.display_name]));
+  }
+
+  // ── AI players (migration 008) ──
+  /** { [userId]: persona } for those of `ids` that are AI players; people are left out. */
+  async getAiPersonas(ids) {
+    if (!ids.length) return {};
+    const rows = await this.q('SELECT id, ai_persona FROM users WHERE id = ANY($1::bigint[]) AND ai_persona IS NOT NULL', [ids]);
+    return Object.fromEntries(rows.map((r) => [n(r.id), r.ai_persona]));
+  }
+
+  /** Removes an AI player's account (never a person's). Call after its seat is deleted. */
+  async deleteAiUser(userId) {
+    const rows = await this.q('DELETE FROM users WHERE id = $1 AND ai_persona IS NOT NULL RETURNING id', [userId]);
+    return rows.length;
+  }
+
+  /** A player's own sheets from turns before `beforeTurn`, oldest first: [{ turnNumber, payload }]. */
+  async listOwnSheets({ gameId, playerId, beforeTurn }) {
+    const rows = await this.q(
+      `SELECT t.number, s.payload FROM sheets s JOIN turns t ON t.id = s.turn_id
+       WHERE s.game_id = $1 AND s.player_id = $2 AND t.number < $3 ORDER BY t.number`, [gameId, playerId, beforeTurn]);
+    return rows.map((r) => ({ turnNumber: r.number, payload: r.payload }));
+  }
+
+  /** Games with an open turn in which a living AI player has not yet submitted a sheet. */
+  async listGamesAwaitingAi() {
+    const rows = await this.q(
+      `SELECT DISTINCT g.id FROM games g
+         JOIN turns t ON t.game_id = g.id AND t.number = g.turn_number AND t.status = 'OPEN'
+         JOIN players p ON p.game_id = g.id AND p.alive
+         JOIN users u ON u.id = p.user_id AND u.ai_persona IS NOT NULL
+       WHERE g.status = 'ACTIVE'
+         AND NOT EXISTS (SELECT 1 FROM sheets s WHERE s.turn_id = t.id AND s.player_id = p.id)
+       ORDER BY g.id`);
+    return rows.map((r) => n(r.id));
   }
 
   async insertGame({ creatorId, seed, turnDeadlineHours, forfeitAfterN }) {

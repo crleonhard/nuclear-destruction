@@ -37,9 +37,9 @@ test('parse: splits up and down, keeps semicolons inside function bodies, reject
   assert.equal(parseMigration('-- migrate:down\nB;\n-- migrate:up\nA;').up, 'A;'); // order does not matter
 });
 
-test('the real migrations: seven, ordered, each with up and down, and every object created is dropped', () => {
+test('the real migrations: eight, ordered, each with up and down, and every object created is dropped', () => {
   const ms = listMigrations(DEFAULT_DIR);
-  assert.deepEqual(ms.map((m) => m.version), ['001', '002', '003', '004', '005', '006', '007']);
+  assert.deepEqual(ms.map((m) => m.version), ['001', '002', '003', '004', '005', '006', '007', '008']);
   for (const m of ms) {
     assert.ok(m.up.length > 0 && m.down.length > 0, m.name);
     for (const [, kind, name] of m.up.matchAll(/CREATE\s+(TABLE|TYPE|FUNCTION|VIEW)\s+(\w+)/gi)) {

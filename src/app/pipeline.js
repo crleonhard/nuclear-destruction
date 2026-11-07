@@ -21,14 +21,15 @@ import {
   wholeFactories, maxAbmFactories, survivingMinors,
 } from '../game/index.js';
 import { fail } from './errors.js';
+import { playAiTurns } from './ai.js';
 import { snapshotToState, stateToWrites, minorKey, toEventRow } from './mapping.js';
 
 const addHours = (d, h) => new Date(d.getTime() + h * 3600 * 1000);
 
 // ───────────────────────── Start a game ─────────────────────────
 
-export async function startGame(store, { gameId, userId }, now = new Date()) {
-  return store.withTransaction(async (tx) => {
+export async function startGame(store, { gameId, userId }, now = new Date(), { playAi = true } = {}) {
+  const started = await store.withTransaction(async (tx) => {
     const game = await tx.lockGame(gameId);
     if (!game) return fail(404, 'NOT_FOUND', 'No such game');
     if (game.creatorId !== userId) return fail(403, 'FORBIDDEN', 'Only the creator can start the game');
@@ -78,6 +79,9 @@ export async function startGame(store, { gameId, userId }, now = new Date()) {
     await tx.saveStart(plan);
     return { ok: true, turnNumber: 1 };
   });
+  // AI players move as soon as turn 1 opens. If this fails the deadline worker tries again (see worker.js).
+  if (started.ok && playAi) await playAiTurns(store, gameId, now).catch(() => {});
+  return started;
 }
 
 // ───────────────────────── Submit a sheet ─────────────────────────
@@ -107,12 +111,16 @@ export async function submitSheet(store, { gameId, userId, payload, final = fals
     const finals = new Set(snap.sheets.filter((s) => s.isFinal).map((s) => s.playerId));
     if (final) finals.add(me.id); else finals.delete(me.id);
     const living = snap.players.filter((p) => p.alive);
+    // With no living person left (only AI players) a submission does not resolve the turn from here: playAiTurns
+    // (ai.js) plays such a game out in a flat loop, so resolutions never nest inside each other.
+    const ai = await tx.getAiPersonas(snap.players.map((p) => p.userId));
+    const personAlive = living.some((p) => !ai[p.userId]);
     return {
       ok: true,
       turnNumber: snap.turn.number,
       finalCount: finals.size,
       activeCount: living.length,
-      allFinal: living.every((p) => finals.has(p.id)),
+      allFinal: personAlive && living.every((p) => finals.has(p.id)),
     };
   });
 
@@ -131,8 +139,8 @@ export async function submitSheet(store, { gameId, userId, payload, final = fals
  * Resolves the currently open turn in ONE transaction. Safe to call repeatedly:
  * returns { resolved: false, reason } when there is nothing to do.
  */
-export async function resolveTurn(store, gameId, { now = new Date(), expectTurnNumber = null } = {}) {
-  return store.withTransaction(async (tx) => {
+export async function resolveTurn(store, gameId, { now = new Date(), expectTurnNumber = null, playAi = true } = {}) {
+  const resolved = await store.withTransaction(async (tx) => {
     const game = await tx.lockGame(gameId);
     if (!game || game.status !== 'ACTIVE') return { resolved: false, reason: 'NOT_ACTIVE' };
     const snap = await tx.loadSnapshot(gameId);
@@ -245,6 +253,13 @@ export async function resolveTurn(store, gameId, { now = new Date(), expectTurnN
     await tx.saveResolution(plan);
     return { resolved: true, turnNumber: closing, over, outcome: next.outcome };
   });
+  // AI players move as soon as the next turn opens. If this fails the deadline worker tries again (see worker.js).
+  // If only AI players are left they play the rest of the game out right there, so report how it ended.
+  if (resolved.resolved && !resolved.over && playAi) {
+    const played = await playAiTurns(store, gameId, now).catch(() => null);
+    if (played?.resolved?.over) return { ...resolved, over: true, outcome: played.resolved.outcome };
+  }
+  return resolved;
 }
 
 // ───────────────────────── Deadline worker ─────────────────────────
@@ -272,10 +287,21 @@ export async function getPackage(store, { gameId, userId }) {
     if (!snap.game) return fail(404, 'NOT_FOUND', 'No such game');
     const me = snap.players.find((p) => p.userId === userId);
     if (!me) return fail(403, 'FORBIDDEN', 'You are not in this game');
+    return packageFor(tx, snap, me);
+  });
+}
+
+/**
+ * The package for one seat, built inside an open transaction. People get it from the API; AI players get exactly
+ * the same thing, so an AI can never know more than a person in its seat would.
+ */
+export async function packageFor(tx, snap, me) {
+  {
     const countryById = new Map(snap.players.map((p) => [p.id, p.country]));
+    const ai = await tx.getAiPersonas(snap.players.map((p) => p.userId));
 
     const pub = {
-      players: snap.players.map((p) => ({ country: p.country, population: p.population, alive: p.alive, forfeited: p.forfeited })),
+      players: snap.players.map((p) => ({ country: p.country, population: p.population, alive: p.alive, forfeited: p.forfeited, ai: ai[p.userId] ?? null })),
       minors: snap.minors.map((m) => ({
         id: minorKey(m),
         name: minorDisplayName(m),
@@ -287,7 +313,7 @@ export async function getPackage(store, { gameId, userId }) {
 
     const { state } = snapshotToState(snap);
     const prev = snap.turn.number > 1
-      ? await tx.loadPrevious({ gameId, playerId: me.id, turnNumber: snap.turn.number - 1 })
+      ? await tx.loadPrevious({ gameId: snap.game.id, playerId: me.id, turnNumber: snap.turn.number - 1 })
       : { reports: [], messages: [], news: [], battleResult: null };
 
     return {
@@ -315,7 +341,7 @@ export async function getPackage(store, { gameId, userId }) {
       mySheet: snap.sheets.find((s) => s.playerId === me.id)?.payload ?? null,
       public: pub,
     };
-  });
+  }
 }
 
 // ───────────────────────── Sheet helpers (read-only) ─────────────────────────

@@ -9,31 +9,7 @@ import { loginView } from '../src/client/js/views/login.js';
 import { verifyView } from '../src/client/js/views/verify.js';
 import { startRouter } from '../src/client/js/router.js';
 
-// ───────────────────────── a tiny DOM ─────────────────────────
-
-class FakeText { constructor(t) { this.nodeType = 3; this.textContent = t; } }
-class FakeElement {
-  constructor(tag) { this.nodeType = 1; this.tagName = tag; this.attrs = {}; this.kids = []; this.dataset = {}; this.listeners = {}; this.className = ''; this.focused = false; }
-  setAttribute(k, v) { this.attrs[k] = v; }
-  addEventListener(t, fn) { this.listeners[t] = fn; }
-  append(...nodes) { this.kids.push(...nodes); }
-  replaceChildren() { this.kids = []; }
-  focus() { this.focused = true; }
-}
-const walk = (node, fn) => { fn(node); for (const k of node.kids ?? []) walk(k, fn); };
-const find = (root, pred) => { let hit = null; walk(root, (n) => { if (!hit && n.nodeType === 1 && pred(n)) hit = n; }); return hit; };
-const textOf = (root) => { let t = ''; walk(root, (n) => { if (n.nodeType === 3) t += n.textContent; }); return t; };
-const byId = (root, id) => find(root, (n) => n.attrs.id === id);
-const button = (root, label) => find(root, (n) => n.tagName === 'button' && textOf(n) === label);
-const submit = async (form) => { await form.listeners.submit({ preventDefault() {} }); await new Promise((r) => setImmediate(r)); };
-const click = async (el) => { await el.listeners.click(); await new Promise((r) => setImmediate(r)); };
-
-function withDom(fn) {
-  return async (t) => {
-    globalThis.document = { createElement: (tag) => new FakeElement(tag), createTextNode: (x) => new FakeText(x) };
-    try { await fn(t); } finally { delete globalThis.document; }
-  };
-}
+import { FakeElement, walk, find, textOf, byId, button, submit, click, withDom } from './support/fake-dom.js';
 
 const fakeTokens = (initial = null) => { let v = initial; return { get: () => v, set: (x) => { v = x; }, clear: () => { v = null; } }; };
 const apiError = (status, code, message) => new ApiError(status, [{ code, field: 'request', message }]);

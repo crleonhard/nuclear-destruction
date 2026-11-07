@@ -113,7 +113,7 @@ test('client: every API call it makes exists in the OpenAPI spec, with the right
   const found = new Set();
   for (const f of js) {
     for (const [, v, raw] of read(f).matchAll(/api\.(get|post|put|del)\(\s*[`'"]([^`'"]+)[`'"]/g)) {
-      const p = raw.replace(/\$\{base\}/g, '/api/v1/games/{id}').replace(/\$\{[^}]+\}/g, '{id}');
+      const p = raw.replace(/\$\{base\}/g, '/api/v1/games/{id}').replace(/\$\{[^}]+\}/g, '{id}').replace(/\/ai\/\{id\}$/, '/ai/{aiUserId}');
       assert.ok(spec.has(`${verb[v]} ${p}`), `${f}: ${v.toUpperCase()} ${raw} is not in the API spec`);
       found.add(`${verb[v]} ${p}`);
     }
@@ -123,7 +123,7 @@ test('client: every API call it makes exists in the OpenAPI spec, with the right
   assert.ok(spec.has('get /api/v1/games/{id}/stream'));
   // Every game action a player can take is used somewhere in the client.
   for (const op of ['post /api/v1/users', 'get /api/v1/auth/config', 'post /api/v1/auth/email-link', 'post /api/v1/auth/verify', 'get /api/v1/me', 'get /api/v1/games', 'post /api/v1/games', 'get /api/v1/games/{id}/lobby', 'post /api/v1/games/{id}/join',
-    'put /api/v1/games/{id}/country', 'delete /api/v1/games/{id}/membership', 'put /api/v1/games/{id}/population', 'post /api/v1/games/{id}/start',
+    'put /api/v1/games/{id}/country', 'delete /api/v1/games/{id}/membership', 'post /api/v1/games/{id}/ai', 'delete /api/v1/games/{id}/ai/{aiUserId}', 'put /api/v1/games/{id}/population', 'post /api/v1/games/{id}/start',
     'get /api/v1/games/{id}/state', 'get /api/v1/games/{id}/turn', 'get /api/v1/games/{id}/sheet', 'post /api/v1/games/{id}/sheet/validate',
     'put /api/v1/games/{id}/sheet', 'post /api/v1/games/{id}/sheet/submit', 'get /api/v1/games/{id}/history', 'get /api/v1/games/{id}/replay']) {
     assert.ok(found.has(op), `the client never calls ${op}`);

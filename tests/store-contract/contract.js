@@ -312,7 +312,7 @@ export function defineStoreContract(label, { makeStore, adapter }) {
     assert.deepEqual(india.news, [{ from: null, text: 'peace' }]);
     const japan = await getPackage(store, { gameId: g.gameId, userId: g.users[2] });
     assert.deepEqual(japan.messages, [{ from: 'FRANCE', text: 'hello' }]);
-    for (const p of india.public.players) assert.deepEqual(Object.keys(p).sort(), ['alive', 'country', 'forfeited', 'population']);
+    for (const p of india.public.players) assert.deepEqual(Object.keys(p).sort(), ['ai', 'alive', 'country', 'forfeited', 'population']);
     assert.equal(typeof india.turn.submitted, 'number');
     assert.equal(india.assets.cash, 105);
 
@@ -412,5 +412,68 @@ export function defineStoreContract(label, { makeStore, adapter }) {
     assert.deepEqual(await read(store, (tx) => tx.getUsers([first.user.id])), { [first.user.id]: 'Ada' });
     const plain = await read(store, (tx) => tx.createUser('No Email'));   // old-style accounts still work
     assert.notEqual(plain.id, first.user.id);
+  });
+
+  // ───────── AI players ─────────
+
+  t('ai accounts: personas are reported for AI users only, and only AI accounts can be deleted', async (store) => {
+    const person = await read(store, (tx) => tx.createUser('A Person'));
+    const bot = await read(store, (tx) => tx.createUser('Hawk AI', { aiPersona: 'HAWK' }));
+    const bot2 = await read(store, (tx) => tx.createUser('Diplomat AI', { aiPersona: 'DIPLOMAT' }));
+    assert.deepEqual(await read(store, (tx) => tx.getAiPersonas([person.id, bot.id, bot2.id, 999999])), { [bot.id]: 'HAWK', [bot2.id]: 'DIPLOMAT' });
+    assert.deepEqual(await read(store, (tx) => tx.getAiPersonas([])), {});
+    assert.deepEqual(await read(store, (tx) => tx.getAiPersonas([person.id])), {});
+    assert.equal(await read(store, (tx) => tx.deleteAiUser(person.id)), 0, 'a person is never deleted');
+    assert.deepEqual(await read(store, (tx) => tx.getUsers([person.id])), { [person.id]: 'A Person' });
+    assert.equal(await read(store, (tx) => tx.deleteAiUser(bot.id)), 1);
+    assert.deepEqual(await read(store, (tx) => tx.getUsers([bot.id, bot2.id])), { [bot2.id]: 'Diplomat AI' });
+    assert.equal(await read(store, (tx) => tx.deleteAiUser(bot.id)), 0, 'already gone');
+  });
+
+  t('own sheets: a player\'s earlier sheets come back oldest first, never anyone else\'s, never the current turn\'s', async (store) => {
+    const g = await started(store, { countries: COUNTRIES });
+    const sheet1 = { giveCashToMinors: { 'CUBA#1': 7 } };
+    const sheet2 = { giveCashToMinors: { 'CUBA#1': 3 }, giveMissilesToMinors: { 'CUBA#1': 1 } };
+    await allFinal(store, g, (c) => (c === 'FRANCE' ? sheet1 : { build: { missiles: 9 } }), hours(1));
+    await allFinal(store, g, (c) => (c === 'FRANCE' ? sheet2 : {}), hours(2));
+    const france = who(await snap(store, g.gameId), 'FRANCE').id;
+    const india = who(await snap(store, g.gameId), 'INDIA').id;
+    const own = (playerId, beforeTurn) => read(store, (tx) => tx.listOwnSheets({ gameId: g.gameId, playerId, beforeTurn }));
+    assert.deepEqual(await own(france, 3), [{ turnNumber: 1, payload: sheet1 }, { turnNumber: 2, payload: sheet2 }]);
+    assert.deepEqual(await own(france, 2), [{ turnNumber: 1, payload: sheet1 }]);
+    assert.deepEqual(await own(france, 1), []);
+    assert.deepEqual((await own(india, 3)).map((x) => x.turnNumber), [1, 2]);
+    assert.deepEqual((await own(india, 3))[0].payload, { build: { missiles: 9 } });
+  });
+
+  t('games awaiting an AI: listed while a living AI has no sheet for the open turn, not after', async (store) => {
+    const person = await read(store, (tx) => tx.createUser('Person'));
+    const bots = [await read(store, (tx) => tx.createUser('Hawk AI', { aiPersona: 'HAWK' })), await read(store, (tx) => tx.createUser('Diplomat AI', { aiPersona: 'DIPLOMAT' }))];
+    const users = [person, ...bots];
+    const gameId = await read(store, (tx) => tx.insertGame({ creatorId: person.id, seed: 777, turnDeadlineHours: 24, forfeitAfterN: 5 }));
+    for (let i = 0; i < 3; i++) {
+      await read(store, async (tx) => { const id = await tx.insertPlayer({ gameId, userId: users[i].id }); await tx.updateLobbyPlayer(id, { country: COUNTRIES[i], startPopulation: 50 }); });
+    }
+    const awaiting = async () => (await read(store, (tx) => tx.listGamesAwaitingAi())).includes(gameId);
+    assert.equal(await awaiting(), false, 'a lobby is not waiting on anyone');
+    assert.equal((await startGame(store, { gameId, userId: person.id }, T0, { playAi: false })).ok, true);
+    assert.equal(await awaiting(), true);
+    assert.equal((await submitSheet(store, { gameId, userId: bots[0].id, payload: {}, final: true }, hours(1))).ok, true);
+    assert.equal(await awaiting(), true, 'one AI is still missing');
+    assert.equal((await submitSheet(store, { gameId, userId: bots[1].id, payload: {}, final: false }, hours(1))).ok, true);
+    assert.equal(await awaiting(), false, 'a saved draft counts: the AI has a sheet');
+    // The person finishing resolves the turn (the bots are final or drafted); next turn the AIs are missing again.
+    assert.equal((await resolveTurn(store, gameId, { now: hours(2), playAi: false })).resolved, true);
+    assert.equal(await awaiting(), true);
+  });
+
+  t('AI players move by themselves: starting a game and resolving a turn both leave every living AI with a final sheet', async (store) => {
+    const person = await read(store, (tx) => tx.createUser('Person'));
+    const made = await createGame(store, { userId: person.id, settings: { aiPlayers: 2 } });
+    assert.equal((await startGame(store, { gameId: made.gameId, userId: person.id }, T0)).ok, true);
+    const finalsOf = async () => { const s = await snap(store, made.gameId); return [s.game.turnNumber, s.sheets.filter((x) => x.isFinal).length]; };
+    assert.deepEqual(await finalsOf(), [1, 2]);
+    assert.equal((await submitSheet(store, { gameId: made.gameId, userId: person.id, payload: {}, final: true }, hours(1))).resolved, true);
+    assert.deepEqual(await finalsOf(), [2, 2]);
   });
 }

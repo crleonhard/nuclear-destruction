@@ -16,6 +16,14 @@ export function label(name) {
   return g > 1 ? `${pretty} (${roman(g)})` : pretty;
 }
 
+/** How AI players are described to people. Keep the keys in step with src/ai/personas.js (a test checks this). */
+export const AI_STYLES = {
+  HAWK: { label: 'Hawk', blurb: 'Builds missiles, declares war early and fires everything it has.' },
+  DIPLOMAT: { label: 'Diplomat', blurb: 'Grows first, courts many minors, defends heavily and strikes late.' },
+  OPPORTUNIST: { label: 'Opportunist', blurb: 'Balanced. Waits until it looks at least as strong as the rivals it has spied on.' },
+};
+export const aiStyleLabel = (key) => AI_STYLES[key]?.label ?? 'AI';
+
 export const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** Factories are held in thirds: 23 thirds is "7 2/3". */

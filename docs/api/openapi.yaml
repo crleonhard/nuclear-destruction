@@ -512,6 +512,94 @@ paths:
           "$ref": "#/components/responses/RateLimited"
         "500":
           "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/ai":
+    post:
+      operationId: "addAiPlayer"
+      tags:
+        - "Lobby"
+      summary: "Creator: add an AI player"
+      description: "Seats an AI player in the lobby. Its country is assigned like anyone else's who has not chosen one, and its starting population can be set with `PUT /population`. Leave `persona` out for a random play style. AI players count towards the 3 to 9 needed to start."
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      requestBody:
+        required: false
+        content:
+          "application/json":
+            schema:
+              type: "object"
+              properties:
+                persona:
+                  "$ref": "#/components/schemas/AiPersona"
+              required: []
+      responses:
+        "201":
+          description: "Seated."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  userId:
+                    type: "integer"
+                    minimum: 1
+                    description: "The AI player's user id, as shown in the lobby seats."
+                required:
+                  - "userId"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/Unprocessable"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/ai/{aiUserId}":
+    delete:
+      operationId: "removeAiPlayer"
+      tags:
+        - "Lobby"
+      summary: "Creator: remove an AI player"
+      description: "Only while the game is in its lobby."
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+        - "$ref": "#/components/parameters/AiUserId"
+      responses:
+        "200":
+          description: "Removed."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Empty"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
   "/api/v1/games/{id}/start":
     post:
       operationId: "startGame"
@@ -842,6 +930,14 @@ components:
       schema:
         type: "integer"
         minimum: 1
+    AiUserId:
+      name: "aiUserId"
+      in: "path"
+      required: true
+      description: "User id of an AI player, from the lobby seats."
+      schema:
+        type: "integer"
+        minimum: 1
   schemas:
     Country:
       type: "string"
@@ -863,6 +959,13 @@ components:
         - "CUBA#1"
         - "CUBA#2"
       description: "A minor country: BASE#generation. Generation 1 is the original; replacements are #2, #3 and so on (shown as \"CUBA (II)\")."
+    AiPersona:
+      type: "string"
+      enum:
+        - "HAWK"
+        - "DIPLOMAT"
+        - "OPPORTUNIST"
+      description: "How an AI player plays. HAWK: builds fast, declares war early, fires everything. DIPLOMAT: grows first, courts many minors, defends heavily, strikes late. OPPORTUNIST: balanced; waits until it looks at least as strong as the rivals it has spied on."
     ErrorCode:
       type: "string"
       enum:
@@ -899,6 +1002,7 @@ components:
         - "LINK_INVALID"
         - "NAME_REQUIRED"
         - "MAIL_UNAVAILABLE"
+        - "PERSONA_INVALID"
     ValidationError:
       type: "object"
       properties:
@@ -1454,11 +1558,16 @@ components:
           type: "boolean"
         forfeited:
           type: "boolean"
+        ai:
+          oneOf:
+            - "$ref": "#/components/schemas/AiPersona"
+            - type: "null"
       required:
         - "country"
         - "population"
         - "alive"
         - "forfeited"
+        - "ai"
     PublicMinor:
       type: "object"
       properties:
@@ -1617,11 +1726,17 @@ components:
               minimum: 25
               maximum: 99
             - type: "null"
+        ai:
+          oneOf:
+            - "$ref": "#/components/schemas/AiPersona"
+            - type: "null"
       required:
         - "userId"
         - "displayName"
         - "country"
         - "startPopulation"
+        - "ai"
+      description: "`ai` is the play style of an AI player, or null for a person."
     Lobby:
       type: "object"
       properties:
@@ -1745,6 +1860,12 @@ components:
           maximum: 30
           default: 5
           description: "Consecutive missed turns before a player is forfeited. 0 = never."
+        aiPlayers:
+          type: "integer"
+          minimum: 0
+          maximum: 8
+          default: 0
+          description: "AI players to seat alongside the creator, each with a random play style. More can be added or removed in the lobby."
       required: []
     History:
       type: "object"

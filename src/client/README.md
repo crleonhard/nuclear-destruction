@@ -27,6 +27,11 @@ js/
 - **No private data over the live stream.** Events only say that something changed; the client then refetches.
 - **Every API call exists in the OpenAPI spec**, checked by a test.
 
+## AI players
+
+The create form takes a number of AI players; the lobby marks AI seats with their style, and the creator can add (with a style, or random)
+and remove them. `format.js` holds the style names and descriptions; a test checks they match `src/ai/personas.js`.
+
 ## Signing in
 
 `js/auth.js` is the only place that knows how people get an account. The login screen asks the server which method it offers:

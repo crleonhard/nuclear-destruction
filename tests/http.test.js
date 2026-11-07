@@ -236,7 +236,7 @@ scenario('play: state, sheet view, dry run, drafts, early resolution, history, S
     assert.equal(state.body.assets.cash, 100);
     assert.equal(state.body.turn.number, 1);
     assert.equal(state.body.turn.submitted, 0);
-    for (const pl of state.body.public.players) assert.deepEqual(Object.keys(pl).sort(), ['alive', 'country', 'forfeited', 'population']);
+    for (const pl of state.body.public.players) assert.deepEqual(Object.keys(pl).sort(), ['ai', 'alive', 'country', 'forfeited', 'population']);
 
     const view = await ctx.call(a.token, 'GET', p('sheet'));
     assert.equal(view.body.sheet, null);

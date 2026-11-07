@@ -12,7 +12,8 @@ The rules and every decision made about them are in [`docs/rules.md`](docs/rules
 ```
 src/
   game/        the rules: pure functions, no I/O, no clocks (state in, state out)
-  app/         use cases: start a game, submit a sheet, resolve a turn, lobby; talks to a store
+  app/         use cases: start a game, submit a sheet, resolve a turn, lobby, AI players' turns; talks to a store
+  ai/          AI players: play styles and the decision code (see src/ai/README.md)
   store/       where state lives: memory.js (tests, local) and postgres.js
   http/        the web layer: routes, tokens, email-link sign-in, OpenAPI description, and serving the client
   mail/        sending email: a small SMTP client and the mailers (smtp, console, memory)
@@ -25,7 +26,7 @@ scripts/       build-openapi.js, run-db-tests.js, dev.js
 tests/         game, HTTP, API contract, and the store contract suite (one suite, run against every store)
 ```
 
-**Dependencies point inward only:** `game` <- `app` <- (`store`, `http`) <- `server`. The rules never import
+**Dependencies point inward only:** `game` <- `ai` <- `app` <- (`store`, `http`) <- `server`. The rules never import
 anything; the stores and the HTTP layer never import each other.
 
 ## Commands
@@ -49,6 +50,8 @@ npm start                the production server (needs DATABASE_URL, AUTH_SECRET 
   the in-memory store in `npm test` and on PostgreSQL in `npm run test:db`, so the two cannot quietly differ.
 - `tests/openapi.test.js` plays a whole game over real HTTP and checks every response against the spec.
   `tests/http.test.js` and this file run on the in-memory store in `npm test`, and on PostgreSQL in `npm run test:db`.
+- `tests/ai-decide.test.js`, `tests/ai-play.test.js` and `tests/client-ai.test.js` check AI players: the decisions (hand-built situations and a fuzz of 4,000 random
+  game states, every sheet validated by the real rules), the lobby, AI turns inside real games, fairness, and full self-played games.
 - `tests/login.test.js`, `tests/mail.test.js` and `tests/client-login.test.js` check email sign-in: the flow over real HTTP (single use, expiry,
   rate limits, no account discovery), the SMTP client against a scripted mail server over real TLS and STARTTLS, and the sign-in screens.
   `tests/server-process.test.js` also signs in through a real server process that delivers the email over SMTP.
@@ -71,9 +74,17 @@ The browser client is verified in a real browser by `npm run e2e` (a full three-
 phone width, dark mode, accessibility names, no console or CSP errors). It has been run on Linux only; the PostgreSQL
 database tests above have been run on Windows.
 
-Sign-in by emailed link is built (below). It is covered by the tests listed above, which pass on the in-memory store here;
-its PostgreSQL parts (migration 007, the store methods, the schema test) have not yet been run on PostgreSQL: run
+Email sign-in and AI players are built and covered by the tests listed above, which pass on the in-memory store. Their PostgreSQL
+parts (migrations 007 and 008, the new store methods, the schema test) have not yet been run on PostgreSQL: run
 `npm run test:db:docker`.
+
+## AI players
+
+When creating a game you can seat 0 to 8 AI players (the creator takes the other seat), and in the lobby the creator can add
+more, choose a play style for each, remove them, and set their starting populations. AI players count towards the 3 to 9
+needed, get a random free country like anyone who has not chosen one, and send in their orders by themselves the moment a turn
+opens. They see only what a person in their seat would see, and are marked "AI" in the lobby and the players table. See
+`src/ai/README.md` for how they play, and `docs/rules.md` for the rulings.
 
 ## Signing in
 

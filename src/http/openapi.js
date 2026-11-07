@@ -5,6 +5,7 @@
 // Keep it in step with app.js; the contract tests fail loudly if they drift apart.
 
 import { COUNTRIES } from '../game/index.js';
+import { AI_PERSONAS } from '../ai/personas.js';
 
 const ref = (name) => ({ $ref: `#/components/schemas/${name}` });
 const resp = (name) => ({ $ref: `#/components/responses/${name}` });
@@ -54,12 +55,15 @@ export const ERROR_CODES = [
   'PAYLOAD_TOO_LARGE', 'RATE_LIMITED', 'INTERNAL',
   // email sign-in
   'EMAIL_INVALID', 'LINK_INVALID', 'NAME_REQUIRED', 'MAIL_UNAVAILABLE',
+  // AI players
+  'PERSONA_INVALID',
 ];
 
 const schemas = {
   // ── Shared vocabulary ──
   Country: { type: 'string', enum: COUNTRIES, description: 'A player country. Also the identifier players use for each other in sheets and messages.' },
   MinorId: { type: 'string', pattern: '^[A-Z]+#[0-9]+$', examples: ['CUBA#1', 'CUBA#2'], description: 'A minor country: BASE#generation. Generation 1 is the original; replacements are #2, #3 and so on (shown as "CUBA (II)").' },
+  AiPersona: { type: 'string', enum: AI_PERSONAS, description: 'How an AI player plays. HAWK: builds fast, declares war early, fires everything. DIPLOMAT: grows first, courts many minors, defends heavily, strikes late. OPPORTUNIST: balanced; waits until it looks at least as strong as the rivals it has spied on.' },
   ErrorCode: { type: 'string', enum: ERROR_CODES },
   ValidationError: obj({
     code: ref('ErrorCode'),
@@ -186,7 +190,7 @@ const schemas = {
     missiles: nat('Includes the +5 war bonus on the first battle turn.'),
     abms: nat(),
   }),
-  PublicPlayer: obj({ country: nullable(ref('Country')), population: nat(), alive: { type: 'boolean' }, forfeited: { type: 'boolean' } }),
+  PublicPlayer: obj({ country: nullable(ref('Country')), population: nat(), alive: { type: 'boolean' }, forfeited: { type: 'boolean' }, ai: nullable(ref('AiPersona')) }),
   PublicMinor: obj({ id: ref('MinorId'), name: str({ examples: ['CUBA', 'CUBA (II)'] }), population: nat(), destroyed: { type: 'boolean' } }),
   TurnInfo: obj({
     number: int({ minimum: 1 }),
@@ -212,7 +216,7 @@ const schemas = {
   TurnSummary: obj({ game: ref('GameStatus'), turn: nullable(ref('TurnInfo')) }, ['game']),
 
   // ── Lobby ──
-  Seat: obj({ userId: int({ minimum: 1 }), displayName: nullable(str()), country: nullable(ref('Country')), startPopulation: nullable(int({ minimum: 25, maximum: 99 })) }),
+  Seat: obj({ userId: int({ minimum: 1 }), displayName: nullable(str()), country: nullable(ref('Country')), startPopulation: nullable(int({ minimum: 25, maximum: 99 })), ai: nullable(ref('AiPersona')) }, undefined, { description: '`ai` is the play style of an AI player, or null for a person.' }),
   Lobby: obj({
     game: obj({
       id: int({ minimum: 1 }),
@@ -229,6 +233,7 @@ const schemas = {
   GameSettings: obj({
     turnDeadlineHours: int({ minimum: 1, maximum: 168, default: 24 }),
     forfeitAfterN: int({ minimum: 0, maximum: 30, default: 5, description: 'Consecutive missed turns before a player is forfeited. 0 = never.' }),
+    aiPlayers: int({ minimum: 0, maximum: 8, default: 0, description: 'AI players to seat alongside the creator, each with a random play style. More can be added or removed in the lobby.' }),
   }, []),
 
   // ── Results ──
@@ -363,6 +368,21 @@ const paths = {
       responses: { ...ok('Set.', ref('Empty')), ...errs(...WRITE, 403, 404, 409, 422) },
     }),
   },
+  '/api/v1/games/{id}/ai': {
+    post: operation({
+      id: 'addAiPlayer', tag: 'Lobby', summary: 'Creator: add an AI player', parameters: [gameIdParam],
+      description: 'Seats an AI player in the lobby. Its country is assigned like anyone else\'s who has not chosen one, and its starting population can be set with `PUT /population`. Leave `persona` out for a random play style. AI players count towards the 3 to 9 needed to start.',
+      requestBody: { required: false, content: jsonBody(obj({ persona: ref('AiPersona') }, [])) },
+      responses: { ...ok('Seated.', obj({ userId: int({ minimum: 1, description: 'The AI player\'s user id, as shown in the lobby seats.' }) }), '201'), ...errs(...WRITE, 403, 404, 409, 422) },
+    }),
+  },
+  '/api/v1/games/{id}/ai/{aiUserId}': {
+    delete: operation({
+      id: 'removeAiPlayer', tag: 'Lobby', summary: 'Creator: remove an AI player', parameters: [gameIdParam, { $ref: '#/components/parameters/AiUserId' }],
+      description: 'Only while the game is in its lobby.',
+      responses: { ...ok('Removed.', ref('Empty')), ...errs(...WRITE, 403, 404, 409) },
+    }),
+  },
   '/api/v1/games/{id}/start': {
     post: operation({
       id: 'startGame', tag: 'Lobby', summary: 'Creator: start the game', parameters: [gameIdParam],
@@ -470,6 +490,7 @@ export const openapi = {
     },
     parameters: {
       GameId: { name: 'id', in: 'path', required: true, description: 'Game id.', schema: int({ minimum: 1 }) },
+      AiUserId: { name: 'aiUserId', in: 'path', required: true, description: 'User id of an AI player, from the lobby seats.', schema: int({ minimum: 1 }) },
     },
     schemas,
     responses,
