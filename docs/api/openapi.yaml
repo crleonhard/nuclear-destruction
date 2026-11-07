@@ -1,0 +1,1931 @@
+openapi: "3.1.0"
+info:
+  title: "Nuclear Destruction API"
+  version: "1.0.0"
+  description: "An asynchronous multiplayer turn-based strategy game for 3 to 9 players. Players submit a sheet each turn; the server resolves all sheets together.\n\n**Conventions**\n- Authenticate with `Authorization: Bearer <token>`. Tokens are signed and expire.\n- Every error body is `{\"errors\": [{\"code\", \"field\", \"message\"}]}`. Validation failures list every problem at once.\n- Game ids are integers. Players are identified by country name (`FRANCE`), minors by `CUBA#1`.\n- Writes are rate limited per user. Request bodies are limited to 256 KB.\n- Unknown routes return 404 and unsupported methods 405 (`METHOD_NOT_ALLOWED`), in the standard error shape.\n- Hidden information stays hidden: other players' cash, stockpiles, factories and minor indices are never returned, anonymous senders are never named, and the game seed is released only by the replay once the game is over."
+servers:
+  - url: "http://localhost:3000"
+    description: "Local development"
+tags:
+  - name: "Meta"
+  - name: "Account"
+  - name: "Lobby"
+    description: "Before the game starts."
+  - name: "Play"
+    description: "Turn sheets and the per-turn view."
+  - name: "Results"
+  - name: "Realtime"
+security:
+  - bearerAuth: []
+paths:
+  "/healthz":
+    get:
+      operationId: "getHealth"
+      tags:
+        - "Meta"
+      summary: "Liveness check"
+      security: []
+      responses:
+        "200":
+          description: "The server is up."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  status:
+                    const: "up"
+                required:
+                  - "status"
+  "/openapi.json":
+    get:
+      operationId: "getOpenApi"
+      tags:
+        - "Meta"
+      summary: "This specification"
+      security: []
+      responses:
+        "200":
+          description: "The OpenAPI document."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+  "/api/v1/users":
+    post:
+      operationId: "createUser"
+      tags:
+        - "Account"
+      summary: "Create an account (development sign-up)"
+      description: "Only available when the server runs with sign-up enabled; otherwise 404. Replace with your real sign-up flow in production."
+      security: []
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: "object"
+              properties:
+                displayName:
+                  type: "string"
+                  minLength: 1
+                  maxLength: 60
+              required:
+                - "displayName"
+      responses:
+        "201":
+          description: "Account created."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  user:
+                    "$ref": "#/components/schemas/User"
+                  token:
+                    type: "string"
+                    description: "Bearer token, valid for 30 days."
+                required:
+                  - "user"
+                  - "token"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/Unprocessable"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/auth/config":
+    get:
+      operationId: "getAuthConfig"
+      tags:
+        - "Account"
+      summary: "Which sign-in methods this server offers"
+      description: "Lets a client show the right sign-in screen."
+      security: []
+      responses:
+        "200":
+          description: "Enabled methods."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  emailLogin:
+                    type: "boolean"
+                    description: "Sign in with an emailed link."
+                  openSignup:
+                    type: "boolean"
+                    description: "Development sign-up by display name (`POST /api/v1/users`)."
+                required:
+                  - "emailLogin"
+                  - "openSignup"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/auth/email-link":
+    post:
+      operationId: "requestEmailLink"
+      tags:
+        - "Account"
+      summary: "Email a one-time sign-in link"
+      description: "Always answers 202 for a well-formed address, whether or not it has an account and even when nothing was sent (for example because that address asked for too many links in the last hour), so the endpoint cannot be used to discover who plays. The email contains a link to the site that works once and expires (15 minutes by default). Limited per client address. Returns 404 when the server has no email sign-in configured; see `GET /api/v1/auth/config`."
+      security: []
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: "object"
+              properties:
+                email:
+                  type: "string"
+                  format: "email"
+                  maxLength: 254
+              required:
+                - "email"
+      responses:
+        "202":
+          description: "Accepted."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  accepted:
+                    const: true
+                required:
+                  - "accepted"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/Unprocessable"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/Unavailable"
+  "/api/v1/auth/verify":
+    post:
+      operationId: "verifyEmailLink"
+      tags:
+        - "Account"
+      summary: "Exchange a sign-in link for a login token"
+      description: "Send the secret from the link (the part after `#/verify/`). It is accepted once. A first-time address also needs `displayName`; without it the answer is 422 `NAME_REQUIRED` and the link stays valid so the call can be repeated with a name. Existing accounts keep their name and ignore `displayName`. Limited per client address."
+      security: []
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: "object"
+              properties:
+                token:
+                  type: "string"
+                  minLength: 43
+                  maxLength: 43
+                displayName:
+                  type: "string"
+                  minLength: 1
+                  maxLength: 60
+              required:
+                - "token"
+      responses:
+        "200":
+          description: "Signed in."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  user:
+                    "$ref": "#/components/schemas/User"
+                  token:
+                    type: "string"
+                    description: "Bearer token, valid for 30 days."
+                required:
+                  - "user"
+                  - "token"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/Unprocessable"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/me":
+    get:
+      operationId: "getMe"
+      tags:
+        - "Account"
+      summary: "The signed-in user"
+      responses:
+        "200":
+          description: "The caller."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  user:
+                    "$ref": "#/components/schemas/User"
+                required:
+                  - "user"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games":
+    get:
+      operationId: "listGames"
+      tags:
+        - "Lobby"
+      summary: "Games the caller has joined"
+      responses:
+        "200":
+          description: "Newest first."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  games:
+                    type: "array"
+                    items:
+                      "$ref": "#/components/schemas/GameSummary"
+                required:
+                  - "games"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+    post:
+      operationId: "createGame"
+      tags:
+        - "Lobby"
+      summary: "Create a game"
+      description: "The creator joins automatically. The game seed is generated by the server and kept secret until the game ends."
+      requestBody:
+        required: false
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/GameSettings"
+      responses:
+        "201":
+          description: "Game created."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  gameId:
+                    type: "integer"
+                    minimum: 1
+                required:
+                  - "gameId"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/Unprocessable"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/lobby":
+    get:
+      operationId: "getLobby"
+      tags:
+        - "Lobby"
+      summary: "Seats, countries and settings"
+      description: "Any signed-in user may look, so invite links work before joining."
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: "The lobby."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Lobby"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/join":
+    post:
+      operationId: "joinGame"
+      tags:
+        - "Lobby"
+      summary: "Join a game in its lobby"
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: "Joined."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Empty"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/country":
+    put:
+      operationId: "pickCountry"
+      tags:
+        - "Lobby"
+      summary: "Pick or release a country"
+      description: "First come, first served. Send `{\"country\": null}` to release your pick. Anyone without a country when the game starts is assigned one at random."
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: "object"
+              properties:
+                country:
+                  oneOf:
+                    - "$ref": "#/components/schemas/Country"
+                    - type: "null"
+              required:
+                - "country"
+      responses:
+        "200":
+          description: "Picked."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  country:
+                    oneOf:
+                      - "$ref": "#/components/schemas/Country"
+                      - type: "null"
+                required:
+                  - "country"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/Unprocessable"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/membership":
+    delete:
+      operationId: "leaveGame"
+      tags:
+        - "Lobby"
+      summary: "Leave a game in its lobby"
+      description: "The creator cannot leave. Not possible once the game has started."
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: "Left."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Empty"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/population":
+    put:
+      operationId: "setPopulation"
+      tags:
+        - "Lobby"
+      summary: "Creator: set a player's starting population"
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: "object"
+              properties:
+                userId:
+                  type: "integer"
+                  minimum: 1
+                population:
+                  oneOf:
+                    - type: "integer"
+                      minimum: 25
+                      maximum: 99
+                    - type: "null"
+              required:
+                - "userId"
+      responses:
+        "200":
+          description: "Set."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Empty"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/Unprocessable"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/start":
+    post:
+      operationId: "startGame"
+      tags:
+        - "Lobby"
+      summary: "Creator: start the game"
+      description: "Needs 3 to 9 players. Assigns leftover countries and populations, creates the 18 minors, and opens turn 1."
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: "Started."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  turnNumber:
+                    const: 1
+                required:
+                  - "turnNumber"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/Unprocessable"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/state":
+    get:
+      operationId: "getState"
+      tags:
+        - "Play"
+      summary: "The caller's turn package"
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: "Start-of-turn view."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/TurnPackage"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/turn":
+    get:
+      operationId: "getTurn"
+      tags:
+        - "Play"
+      summary: "Turn number, type, deadline and submitted count"
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: "Turn summary."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/TurnSummary"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/sheet":
+    get:
+      operationId: "getSheet"
+      tags:
+        - "Play"
+      summary: "Your saved sheet, spy defaults and live limits"
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: "Sheet view."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/SheetView"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+    put:
+      operationId: "saveDraft"
+      tags:
+        - "Play"
+      summary: "Save a draft sheet"
+      description: "The sheet is validated first and only saved when valid. A saved draft counts as submitted if the deadline passes, but does not trigger early resolution."
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/Sheet"
+      responses:
+        "200":
+          description: "Saved."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/SubmitResult"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/Unprocessable"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/sheet/validate":
+    post:
+      operationId: "validateSheet"
+      tags:
+        - "Play"
+      summary: "Validate a sheet without saving"
+      description: "Always 200 for a well-formed request: read `valid` and `errors`. `derived` returns live numbers for the form (whole factories, ABM cap, missile pool, cash available)."
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/Sheet"
+      responses:
+        "200":
+          description: "Validation result."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/DryRun"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/sheet/submit":
+    post:
+      operationId: "submitSheet"
+      tags:
+        - "Play"
+      summary: "Submit a final sheet"
+      description: "Saves and marks the sheet final. When every living player is final the turn resolves immediately (`resolved: true`)."
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/Sheet"
+      responses:
+        "200":
+          description: "Submitted."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/SubmitResult"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/Unprocessable"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/history":
+    get:
+      operationId: "getHistory"
+      tags:
+        - "Results"
+      summary: "Public battle results and world news so far"
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: "Past turns."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/History"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/replay":
+    get:
+      operationId: "getReplay"
+      tags:
+        - "Results"
+      summary: "Full replay: sheets, events and seed"
+      description: "Only after the game has finished (`GAME_NOT_FINISHED` before that), and only for its players."
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: "The replay."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Replay"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/games/{id}/stream":
+    get:
+      operationId: "streamEvents"
+      tags:
+        - "Realtime"
+      summary: "Server-sent events for a game"
+      description: "A long-lived `text/event-stream`. Browsers cannot set headers on `EventSource`, so pass `?token=` instead of the Authorization header.\n\nEach message is `event: <type>` and `data: <json>`. Events carry no private data (only counts and turn numbers), so clients should refetch `/state` when one arrives.\n\n| event | data |\n|---|---|\n| `ready` | `{type}` sent once on connect |\n| `lobby_changed` | `{type}` |\n| `game_started` | `{type}` |\n| `player_submitted` | `{type, finalCount, activeCount}` |\n| `turn_resolved` | `{type, turnNumber}` |\n| `game_finished` | `{type, outcome}` (`WIN` or `DRAW`) |\n\nA `: keep-alive` comment is sent every 25 seconds."
+      security:
+        - bearerAuth: []
+        - tokenQuery: []
+      parameters:
+        - "$ref": "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: "The event stream."
+          content:
+            "text/event-stream":
+              schema:
+                type: "string"
+              example: "event: ready\ndata: {\"type\":\"ready\"}\n\n"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: "http"
+      scheme: "bearer"
+      description: "Signed token from sign-in (`POST /api/v1/auth/verify`)."
+    tokenQuery:
+      type: "apiKey"
+      in: "query"
+      name: "token"
+      description: "Same token, for EventSource, which cannot set headers."
+  parameters:
+    GameId:
+      name: "id"
+      in: "path"
+      required: true
+      description: "Game id."
+      schema:
+        type: "integer"
+        minimum: 1
+  schemas:
+    Country:
+      type: "string"
+      enum:
+        - "BRAZIL"
+        - "CHINA"
+        - "ENGLAND"
+        - "FRANCE"
+        - "GERMANY"
+        - "INDIA"
+        - "JAPAN"
+        - "RUSSIA"
+        - "USA"
+      description: "A player country. Also the identifier players use for each other in sheets and messages."
+    MinorId:
+      type: "string"
+      pattern: "^[A-Z]+#[0-9]+$"
+      examples:
+        - "CUBA#1"
+        - "CUBA#2"
+      description: "A minor country: BASE#generation. Generation 1 is the original; replacements are #2, #3 and so on (shown as \"CUBA (II)\")."
+    ErrorCode:
+      type: "string"
+      enum:
+        - "BUILD_OVER_CAPACITY"
+        - "ABM_CAP_EXCEEDED"
+        - "CASH_OVER_START"
+        - "MISSILE_POOL_EXCEEDED"
+        - "FACTORY_GIFT_LIMIT"
+        - "SPY_PLAYER_LIMIT"
+        - "TARGET_INVALID"
+        - "MESSAGE_INVALID"
+        - "WAR_NOT_ALLOWED"
+        - "FIRE_OVER_STOCK"
+        - "NOT_YOUR_TURN_TYPE"
+        - "NOT_INTEGER"
+        - "TURN_CLOSED"
+        - "ALREADY_STARTED"
+        - "ALREADY_JOINED"
+        - "GAME_FULL"
+        - "COUNTRY_TAKEN"
+        - "CREATOR_CANNOT_LEAVE"
+        - "PLAYER_COUNT"
+        - "GAME_NOT_FINISHED"
+        - "UNAUTHENTICATED"
+        - "FORBIDDEN"
+        - "NOT_FOUND"
+        - "METHOD_NOT_ALLOWED"
+        - "BAD_JSON"
+        - "UNSUPPORTED_MEDIA_TYPE"
+        - "PAYLOAD_TOO_LARGE"
+        - "RATE_LIMITED"
+        - "INTERNAL"
+        - "EMAIL_INVALID"
+        - "LINK_INVALID"
+        - "NAME_REQUIRED"
+        - "MAIL_UNAVAILABLE"
+    ValidationError:
+      type: "object"
+      properties:
+        code:
+          "$ref": "#/components/schemas/ErrorCode"
+        field:
+          type: "string"
+          description: "The offending field path, or \"request\" for request-level problems."
+          examples:
+            - "build.abms"
+            - "spies"
+            - "fire.HOME"
+        message:
+          type: "string"
+      required:
+        - "code"
+        - "field"
+        - "message"
+    ErrorResponse:
+      type: "object"
+      properties:
+        errors:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/ValidationError"
+          minItems: 1
+      required:
+        - "errors"
+    Empty:
+      type: "object"
+      maxProperties: 0
+      description: "An empty JSON object."
+    User:
+      type: "object"
+      properties:
+        id:
+          type: "integer"
+          minimum: 1
+        displayName:
+          oneOf:
+            - type: "string"
+            - type: "null"
+      required:
+        - "id"
+        - "displayName"
+    SpyTarget:
+      type: "object"
+      properties:
+        kind:
+          type: "string"
+          enum:
+            - "PLAYER"
+            - "MINOR"
+        id:
+          oneOf:
+            - "$ref": "#/components/schemas/Country"
+            - "$ref": "#/components/schemas/MinorId"
+      required:
+        - "kind"
+        - "id"
+    Sheet:
+      type: "object"
+      description: "A turn sheet. On a NORMAL turn use every field except `fire`. On a BATTLE turn only `fire`, `messages` and `worldNews` are allowed (anything else gives NOT_YOUR_TURN_TYPE). Unknown properties are ignored. All amounts are whole numbers; cash is in $ millions."
+      properties:
+        build:
+          type: "object"
+          properties:
+            missiles:
+              type: "integer"
+              minimum: 0
+              description: "Factories building missiles. Unassigned factories also build missiles."
+            abms:
+              type: "integer"
+              minimum: 0
+              description: "Factories building ABMs. At most ceil(whole factories / 2)."
+            factories:
+              type: "integer"
+              minimum: 0
+              description: "Factories building new factories; each adds one third of a factory."
+          required: []
+        spies:
+          type: "array"
+          items:
+            oneOf:
+              - "$ref": "#/components/schemas/SpyTarget"
+              - type: "null"
+          maxItems: 3
+          description: "Up to 3 slots. A null or missing slot repeats its last target. At most one effective target may be a player."
+        giveCashToMinors:
+          type: "object"
+          additionalProperties:
+            type: "integer"
+            minimum: 0
+          description: "MinorId -> $M. Each $1M raises your index by 1."
+        giveCashToEveryMinor:
+          type: "integer"
+          minimum: 0
+          description: "Same amount to every surviving minor (cost = amount x survivors)."
+        giveMissilesToMinors:
+          type: "object"
+          additionalProperties:
+            type: "integer"
+            minimum: 0
+          description: "MinorId -> missiles. Each missile raises your index by 10. May include missiles built this turn."
+        giveToPlayers:
+          type: "object"
+          description: "Country -> gift. At most 2 factories to one player."
+          additionalProperties:
+            type: "object"
+            properties:
+              cash:
+                type: "integer"
+                minimum: 0
+              missiles:
+                type: "integer"
+                minimum: 0
+              factories:
+                type: "integer"
+                minimum: 0
+            required: []
+        offerFactory:
+          type: "boolean"
+          description: "Offer one factory for sale to the minors. All offers sell at one price, or none sell."
+        messages:
+          type: "object"
+          description: "Country -> message. At most one message per other living player. Delivered next turn."
+          additionalProperties:
+            type: "object"
+            properties:
+              text:
+                type: "string"
+                maxLength: 500
+              anonymous:
+                type: "boolean"
+            required:
+              - "text"
+        declareWar:
+          type: "boolean"
+          description: "Not allowed on turn 1 or once war has begun."
+        fire:
+          type: "object"
+          description: "BATTLE turns only. Source -> target -> missiles. A source is \"HOME\" or a minor you control (see `controlled`)."
+          additionalProperties:
+            type: "object"
+            additionalProperties:
+              type: "integer"
+              minimum: 0
+        worldNews:
+          type: "object"
+          properties:
+            text:
+              type: "string"
+              maxLength: 60
+            anonymous:
+              type: "boolean"
+          required:
+            - "text"
+      examples:
+        - build:
+            missiles: 4
+            abms: 3
+            factories: 2
+          spies:
+            - kind: "MINOR"
+              id: "CUBA#1"
+            - null
+            - null
+          giveCashToMinors:
+            "CUBA#1": 6
+          messages:
+            INDIA:
+              text: "Let us talk."
+              anonymous: false
+          offerFactory: false
+    NormalLimits:
+      type: "object"
+      properties:
+        type:
+          const: "NORMAL"
+        wholeFactories:
+          type: "integer"
+          minimum: 0
+        abmFactoryCap:
+          type: "integer"
+          minimum: 0
+        builtMissiles:
+          type: "integer"
+          minimum: 0
+          description: "Missiles built this turn given the build spaces."
+        missilePool:
+          type: "integer"
+          minimum: 0
+          description: "Missiles you may give away this turn: stockpile plus built."
+        cashAvailable:
+          type: "integer"
+          minimum: 0
+          description: "Cash you may give away: start-of-turn cash only."
+        survivingMinors:
+          type: "integer"
+          minimum: 0
+        maxFactoriesPerPlayer:
+          type: "integer"
+          minimum: 0
+      required:
+        - "type"
+        - "wholeFactories"
+        - "abmFactoryCap"
+        - "builtMissiles"
+        - "missilePool"
+        - "cashAvailable"
+        - "survivingMinors"
+        - "maxFactoriesPerPlayer"
+    BattleLimits:
+      type: "object"
+      properties:
+        type:
+          const: "BATTLE"
+        homeStock:
+          type: "integer"
+          minimum: 0
+          description: "Missiles your home country can fire (includes the war bonus)."
+        controlled:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/ControlledMinor"
+      required:
+        - "type"
+        - "homeStock"
+        - "controlled"
+    ControlledMinor:
+      type: "object"
+      properties:
+        id:
+          "$ref": "#/components/schemas/MinorId"
+        name:
+          type: "string"
+        missiles:
+          type: "integer"
+          minimum: 0
+      required:
+        - "id"
+        - "name"
+        - "missiles"
+    SheetView:
+      type: "object"
+      properties:
+        turn:
+          type: "object"
+          properties:
+            number:
+              type: "integer"
+              minimum: 1
+            type:
+              type: "string"
+              enum:
+                - "NORMAL"
+                - "BATTLE"
+            deadlineAt:
+              type: "string"
+              format: "date-time"
+            status:
+              type: "string"
+              enum:
+                - "OPEN"
+                - "RESOLVING"
+                - "CLOSED"
+          required:
+            - "number"
+            - "type"
+            - "deadlineAt"
+            - "status"
+        sheet:
+          oneOf:
+            - "$ref": "#/components/schemas/Sheet"
+            - type: "null"
+        isFinal:
+          type: "boolean"
+        spyDefaults:
+          type: "array"
+          items:
+            oneOf:
+              - "$ref": "#/components/schemas/SpyTarget"
+              - type: "null"
+          minItems: 3
+          maxItems: 3
+          description: "What a blank spy slot will repeat."
+        limits:
+          oneOf:
+            - "$ref": "#/components/schemas/NormalLimits"
+            - "$ref": "#/components/schemas/BattleLimits"
+      required:
+        - "turn"
+        - "sheet"
+        - "isFinal"
+        - "spyDefaults"
+        - "limits"
+    DryRun:
+      type: "object"
+      properties:
+        valid:
+          type: "boolean"
+        errors:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/ValidationError"
+        derived:
+          oneOf:
+            - "$ref": "#/components/schemas/NormalLimits"
+            - "$ref": "#/components/schemas/BattleLimits"
+      required:
+        - "valid"
+        - "errors"
+        - "derived"
+    SubmitResult:
+      type: "object"
+      properties:
+        turnNumber:
+          type: "integer"
+          minimum: 1
+        final:
+          type: "boolean"
+        submitted:
+          type: "integer"
+          minimum: 0
+          description: "Players whose sheet is final (a count; names are never shown)."
+        active:
+          type: "integer"
+          minimum: 0
+          description: "Living players."
+        resolved:
+          type: "boolean"
+          description: "True when this submission completed the turn and it resolved immediately."
+      required:
+        - "turnNumber"
+        - "final"
+        - "submitted"
+        - "active"
+        - "resolved"
+    SpyPlayerPayload:
+      oneOf:
+        - type: "object"
+          properties:
+            country:
+              "$ref": "#/components/schemas/Country"
+            missiles:
+              type: "integer"
+              minimum: 0
+            abms:
+              type: "integer"
+              minimum: 0
+          required:
+            - "country"
+            - "missiles"
+            - "abms"
+        - type: "object"
+          properties:
+            country:
+              "$ref": "#/components/schemas/Country"
+            eliminated:
+              const: true
+          required:
+            - "country"
+            - "eliminated"
+    SpyMinorPayload:
+      oneOf:
+        - type: "object"
+          properties:
+            minor:
+              "$ref": "#/components/schemas/MinorId"
+            indices:
+              type: "object"
+              additionalProperties:
+                type: "integer"
+                minimum: 0
+              description: "Country -> popularity index, as of the end of the turn."
+          required:
+            - "minor"
+            - "indices"
+        - type: "object"
+          properties:
+            minor:
+              "$ref": "#/components/schemas/MinorId"
+            destroyed:
+              const: true
+          required:
+            - "minor"
+            - "destroyed"
+    FirstSecondPayload:
+      type: "object"
+      properties:
+        minors:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/MinorId"
+          description: "Minors where you rank first or second with an index above 0 (competition ranking)."
+      required:
+        - "minors"
+    Report:
+      oneOf:
+        - type: "object"
+          properties:
+            kind:
+              const: "SPY_PLAYER"
+            payload:
+              "$ref": "#/components/schemas/SpyPlayerPayload"
+          required:
+            - "kind"
+            - "payload"
+        - type: "object"
+          properties:
+            kind:
+              const: "SPY_MINOR"
+            payload:
+              "$ref": "#/components/schemas/SpyMinorPayload"
+          required:
+            - "kind"
+            - "payload"
+        - type: "object"
+          properties:
+            kind:
+              const: "FIRST_SECOND"
+            payload:
+              "$ref": "#/components/schemas/FirstSecondPayload"
+          required:
+            - "kind"
+            - "payload"
+    Message:
+      type: "object"
+      properties:
+        from:
+          oneOf:
+            - "$ref": "#/components/schemas/Country"
+            - type: "null"
+        text:
+          type: "string"
+          maxLength: 500
+      required:
+        - "from"
+        - "text"
+    NewsItem:
+      type: "object"
+      properties:
+        from:
+          oneOf:
+            - "$ref": "#/components/schemas/Country"
+            - type: "null"
+        text:
+          type: "string"
+          maxLength: 60
+      required:
+        - "from"
+        - "text"
+    BattleResult:
+      type: "object"
+      properties:
+        fired:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              from:
+                type: "string"
+                description: "A country, or a minor id."
+              to:
+                type: "string"
+              n:
+                type: "integer"
+                minimum: 0
+            required:
+              - "from"
+              - "to"
+              - "n"
+        damaged:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              target:
+                type: "string"
+              incoming:
+                type: "integer"
+                minimum: 0
+              intercepted:
+                type: "integer"
+                minimum: 0
+              through:
+                type: "integer"
+                minimum: 0
+              population:
+                type: "integer"
+                minimum: 0
+            required:
+              - "target"
+              - "incoming"
+              - "intercepted"
+              - "through"
+              - "population"
+        controllers:
+          type: "object"
+          additionalProperties:
+            oneOf:
+              - "$ref": "#/components/schemas/Country"
+              - type: "null"
+          description: "Minor -> the player who controlled it this turn, or null."
+      required:
+        - "fired"
+        - "damaged"
+        - "controllers"
+    Assets:
+      type: "object"
+      properties:
+        country:
+          "$ref": "#/components/schemas/Country"
+        population:
+          type: "integer"
+          minimum: 0
+        cash:
+          type: "integer"
+          minimum: 0
+        thirds:
+          type: "integer"
+          minimum: 0
+        factories:
+          type: "integer"
+          minimum: 0
+          description: "Whole factories (thirds / 3, rounded down)."
+        missiles:
+          type: "integer"
+          minimum: 0
+          description: "Includes the +5 war bonus on the first battle turn."
+        abms:
+          type: "integer"
+          minimum: 0
+      required:
+        - "country"
+        - "population"
+        - "cash"
+        - "thirds"
+        - "factories"
+        - "missiles"
+        - "abms"
+    PublicPlayer:
+      type: "object"
+      properties:
+        country:
+          oneOf:
+            - "$ref": "#/components/schemas/Country"
+            - type: "null"
+        population:
+          type: "integer"
+          minimum: 0
+        alive:
+          type: "boolean"
+        forfeited:
+          type: "boolean"
+      required:
+        - "country"
+        - "population"
+        - "alive"
+        - "forfeited"
+    PublicMinor:
+      type: "object"
+      properties:
+        id:
+          "$ref": "#/components/schemas/MinorId"
+        name:
+          type: "string"
+          examples:
+            - "CUBA"
+            - "CUBA (II)"
+        population:
+          type: "integer"
+          minimum: 0
+        destroyed:
+          type: "boolean"
+      required:
+        - "id"
+        - "name"
+        - "population"
+        - "destroyed"
+    TurnInfo:
+      type: "object"
+      properties:
+        number:
+          type: "integer"
+          minimum: 1
+        type:
+          type: "string"
+          enum:
+            - "NORMAL"
+            - "BATTLE"
+        status:
+          type: "string"
+          enum:
+            - "OPEN"
+            - "RESOLVING"
+            - "CLOSED"
+        deadlineAt:
+          type: "string"
+          format: "date-time"
+        submitted:
+          type: "integer"
+          minimum: 0
+          description: "Players with a final sheet. A count only."
+        active:
+          type: "integer"
+          minimum: 0
+      required:
+        - "number"
+        - "type"
+        - "status"
+        - "deadlineAt"
+        - "submitted"
+        - "active"
+    GameStatus:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+          enum:
+            - "LOBBY"
+            - "ACTIVE"
+            - "FINISHED"
+        outcome:
+          oneOf:
+            - type: "string"
+              enum:
+                - "WIN"
+                - "DRAW"
+            - type: "null"
+      required:
+        - "status"
+    TurnPackage:
+      type: "object"
+      properties:
+        game:
+          "$ref": "#/components/schemas/GameStatus"
+        turn:
+          "$ref": "#/components/schemas/TurnInfo"
+        assets:
+          oneOf:
+            - "$ref": "#/components/schemas/Assets"
+            - type: "null"
+        controlled:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/ControlledMinor"
+          description: "Battle turns: minors you control and their missiles."
+        reports:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/Report"
+          description: "Spy results and your first/second list, produced by the previous turn."
+        messages:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/Message"
+        news:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/NewsItem"
+        battleResult:
+          oneOf:
+            - "$ref": "#/components/schemas/BattleResult"
+            - type: "null"
+        mySheet:
+          oneOf:
+            - "$ref": "#/components/schemas/Sheet"
+            - type: "null"
+        public:
+          type: "object"
+          properties:
+            players:
+              type: "array"
+              items:
+                "$ref": "#/components/schemas/PublicPlayer"
+            minors:
+              type: "array"
+              items:
+                "$ref": "#/components/schemas/PublicMinor"
+          required:
+            - "players"
+            - "minors"
+      required:
+        - "game"
+        - "public"
+      description: "Everything the caller may see at the start of the current turn. Other players' cash, stockpiles, factories and indices are never included. Before the game starts only `game` and `public` are present."
+    TurnSummary:
+      type: "object"
+      properties:
+        game:
+          "$ref": "#/components/schemas/GameStatus"
+        turn:
+          oneOf:
+            - "$ref": "#/components/schemas/TurnInfo"
+            - type: "null"
+      required:
+        - "game"
+    Seat:
+      type: "object"
+      properties:
+        userId:
+          type: "integer"
+          minimum: 1
+        displayName:
+          oneOf:
+            - type: "string"
+            - type: "null"
+        country:
+          oneOf:
+            - "$ref": "#/components/schemas/Country"
+            - type: "null"
+        startPopulation:
+          oneOf:
+            - type: "integer"
+              minimum: 25
+              maximum: 99
+            - type: "null"
+      required:
+        - "userId"
+        - "displayName"
+        - "country"
+        - "startPopulation"
+    Lobby:
+      type: "object"
+      properties:
+        game:
+          type: "object"
+          properties:
+            id:
+              type: "integer"
+              minimum: 1
+            status:
+              type: "string"
+              enum:
+                - "LOBBY"
+                - "ACTIVE"
+                - "FINISHED"
+            creatorId:
+              type: "integer"
+              minimum: 1
+            turnNumber:
+              oneOf:
+                - type: "integer"
+                  minimum: 1
+                - type: "null"
+            settings:
+              type: "object"
+              properties:
+                turnDeadlineHours:
+                  type: "integer"
+                  minimum: 1
+                  maximum: 168
+                forfeitAfterN:
+                  type: "integer"
+                  minimum: 0
+                  maximum: 30
+                  description: "0 = never forfeit."
+              required:
+                - "turnDeadlineHours"
+                - "forfeitAfterN"
+            limits:
+              type: "object"
+              properties:
+                minPlayers:
+                  type: "integer"
+                maxPlayers:
+                  type: "integer"
+              required:
+                - "minPlayers"
+                - "maxPlayers"
+          required:
+            - "id"
+            - "status"
+            - "creatorId"
+            - "turnNumber"
+            - "settings"
+            - "limits"
+        seats:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/Seat"
+        countries:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              country:
+                "$ref": "#/components/schemas/Country"
+              takenBy:
+                oneOf:
+                  - type: "string"
+                  - type: "null"
+            required:
+              - "country"
+              - "takenBy"
+      required:
+        - "game"
+        - "seats"
+        - "countries"
+      description: "The game seed is never part of the lobby."
+    GameSummary:
+      type: "object"
+      properties:
+        id:
+          type: "integer"
+          minimum: 1
+        status:
+          type: "string"
+          enum:
+            - "LOBBY"
+            - "ACTIVE"
+            - "FINISHED"
+        turnNumber:
+          oneOf:
+            - type: "integer"
+            - type: "null"
+        creatorId:
+          type: "integer"
+        outcome:
+          oneOf:
+            - type: "string"
+              enum:
+                - "WIN"
+                - "DRAW"
+            - type: "null"
+      required:
+        - "id"
+        - "status"
+        - "turnNumber"
+        - "creatorId"
+        - "outcome"
+    GameSettings:
+      type: "object"
+      properties:
+        turnDeadlineHours:
+          type: "integer"
+          minimum: 1
+          maximum: 168
+          default: 24
+        forfeitAfterN:
+          type: "integer"
+          minimum: 0
+          maximum: 30
+          default: 5
+          description: "Consecutive missed turns before a player is forfeited. 0 = never."
+      required: []
+    History:
+      type: "object"
+      properties:
+        turns:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              number:
+                type: "integer"
+                minimum: 1
+              type:
+                type: "string"
+                enum:
+                  - "NORMAL"
+                  - "BATTLE"
+              battleResult:
+                oneOf:
+                  - "$ref": "#/components/schemas/BattleResult"
+                  - type: "null"
+              news:
+                type: "array"
+                items:
+                  "$ref": "#/components/schemas/NewsItem"
+            required:
+              - "number"
+              - "type"
+              - "battleResult"
+              - "news"
+      required:
+        - "turns"
+    Replay:
+      type: "object"
+      properties:
+        seed:
+          type: "integer"
+          minimum: 0
+          description: "The game seed. Released only now that the game has ended."
+        outcome:
+          oneOf:
+            - type: "string"
+              enum:
+                - "WIN"
+                - "DRAW"
+            - type: "null"
+        winner:
+          oneOf:
+            - "$ref": "#/components/schemas/Country"
+            - type: "null"
+        turns:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              number:
+                type: "integer"
+              type:
+                type: "string"
+                enum:
+                  - "NORMAL"
+                  - "BATTLE"
+              rngSeed:
+                type: "integer"
+                minimum: 0
+            required:
+              - "number"
+              - "type"
+              - "rngSeed"
+        events:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              seq:
+                type: "integer"
+                minimum: 0
+              type:
+                type: "string"
+              payload:
+                type: "object"
+              turnId:
+                type:
+                  - "integer"
+                  - "null"
+            required:
+              - "seq"
+              - "type"
+              - "payload"
+        sheets:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              turn:
+                type: "integer"
+              player:
+                "$ref": "#/components/schemas/Country"
+              source:
+                type: "string"
+                enum:
+                  - "PLAYER"
+                  - "SERVER_DEFAULT"
+              payload:
+                type: "object"
+            required:
+              - "turn"
+              - "player"
+              - "source"
+              - "payload"
+      required:
+        - "seed"
+        - "outcome"
+        - "winner"
+        - "turns"
+        - "events"
+        - "sheets"
+  responses:
+    BadRequest:
+      description: "The body is not valid JSON, or is not a JSON object."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/ErrorResponse"
+    Unauthenticated:
+      description: "Missing, malformed, forged or expired token."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: "You are not a member of this game, or lack the right to do this (for example, only the creator can start it)."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: "No such game, user or route."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: "The request is valid but the game is in the wrong state (turn closed, game started, game full, country taken, and so on)."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/ErrorResponse"
+    PayloadTooLarge:
+      description: "Request bodies are limited to 256 KB."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/ErrorResponse"
+    UnsupportedMediaType:
+      description: "Send `Content-Type: application/json`."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/ErrorResponse"
+    Unprocessable:
+      description: "The request was understood but its contents break a rule. `errors` lists every problem found."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/ErrorResponse"
+    RateLimited:
+      description: "Too many writes. Limit is per user (default 60 per minute)."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/ErrorResponse"
+    Unavailable:
+      description: "A service this request depends on (such as outgoing email) is temporarily unavailable. Try again later."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/ErrorResponse"
+    InternalError:
+      description: "Unexpected failure. The body never contains internal details."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/ErrorResponse"

@@ -1,0 +1,18 @@
+{
+  "name": "nuclear-destruction",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "test:db": "node scripts/run-db-tests.js",
+    "test:db:docker": "node scripts/run-db-tests.js --docker",
+    "build:openapi": "node scripts/build-openapi.js",
+    "migrate": "node db/migrate.js",
+    "dev": "node scripts/dev.js",
+    "e2e": "node scripts/run-e2e.js"
+  },
+  "devDependencies": {
+    "pg": "^8.11.0"
+  }
+}
