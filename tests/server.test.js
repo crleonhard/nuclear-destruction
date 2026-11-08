@@ -136,6 +136,14 @@ test('config: email sign-in is off by default; SMTP_URL alone implies smtp; the 
   assert.ok(!problems({ ...MAIL_BASE, SMTP_URL: 'smtp://u:hunter2@h.example.com' }).join().includes('hunter2'), 'a password is never echoed');
 });
 
+test('config: CLIENT_IP_HEADER is lower-cased, optional, and must look like a header name', () => {
+  assert.equal(readConfig(MAIL_BASE).clientIpHeader, null);
+  assert.equal(readConfig({ ...MAIL_BASE, CLIENT_IP_HEADER: ' CF-Connecting-IP ' }).clientIpHeader, 'cf-connecting-ip');
+  for (const bad of ['two words', 'a:b', 'x'.repeat(65), 'header\r\nInjected: 1']) {
+    assert.deepEqual(problems({ ...MAIL_BASE, CLIENT_IP_HEADER: bad }), ['CLIENT_IP_HEADER must be a header name such as cf-connecting-ip'], JSON.stringify(bad));
+  }
+});
+
 test('config: production refuses the console transport and a non-https site address', () => {
   assert.deepEqual(problems({ ...MAIL_BASE, NODE_ENV: 'production', MAIL_TRANSPORT: 'console', APP_URL: 'https://game.example.com' }),
     ['MAIL_TRANSPORT=console prints sign-in links to the log, so it is not allowed when NODE_ENV=production']);

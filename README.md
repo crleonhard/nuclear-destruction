@@ -78,6 +78,28 @@ Email sign-in and AI players are built and covered by the tests listed above, wh
 parts (migrations 007 and 008, the new store methods, the schema test) have not yet been run on PostgreSQL: run
 `npm run test:db:docker`.
 
+## Deploying (Aiven database + Render web service)
+
+1. **Database (Aiven).** Create a PostgreSQL 16 service. From its Overview page copy the *Service URI* and download `ca.pem`.
+2. **Code.** Put this project in a Git repository on GitHub or GitLab (`node_modules` is already ignored).
+3. **Web service (Render).** New > Blueprint, pick the repository: Render reads `render.yaml`. When asked, fill in:
+   `DATABASE_URL` (the Aiven URI), `APP_URL` (this service's own address, e.g. `https://nuclear-destruction.onrender.com`),
+   `SMTP_URL` and `MAIL_FROM` (see "Signing in"). Then open the service > Environment > Secret Files, add a file named
+   `aiven-ca.pem` and paste the contents of Aiven's `ca.pem` (Aiven signs with its own CA; without this Node refuses the connection).
+   If `APP_URL` was not known before the first deploy, set it afterwards and redeploy.
+4. Every deploy runs `npm run migrate -- up` first, so the schema is always current. A failed migration fails the deploy.
+
+Things specific to this setup:
+
+- **Use a paid instance** (the blueprint says `starter`). A free Render instance sleeps after 15 idle minutes, and the timer that
+  closes turns at their deadline sleeps with it: deadlines would pass late, and the first visitor after a pause waits about a minute.
+  Run one instance only.
+- **`CLIENT_IP_HEADER=cf-connecting-ip`** is set by the blueprint. Render sits behind Cloudflare, so the sign-in rate limits need
+  the visitor's real address from that header (the last `X-Forwarded-For` entry is a Cloudflare server, and without any setting
+  every visitor would share one limit). Do not use `TRUST_PROXY` on Render.
+- **Locally against Aiven:** set `DATABASE_URL` and `NODE_EXTRA_CA_CERTS` (path to `ca.pem`) before `npm run migrate -- up`.
+  Do not run `npm run test:db` against a real service: it creates and drops databases.
+
 ## AI players
 
 When creating a game you can seat 0 to 8 AI players (the creator takes the other seat), and in the lobby the creator can add
@@ -104,12 +126,22 @@ Things worth knowing:
 - **Use an email provider** (Postmark, SendGrid, Amazon SES, Mailgun, Fastmail, your own server...) and verify your sending
   domain with them (SPF and DKIM records). Without that, many inboxes will put the sign-in emails in spam. Some hosts block
   outgoing SMTP ports; if yours does, use your provider's port 587 or 2525 option, or ask the host.
+- **Hosts that block the usual mail ports** (Render's free tier blocks 25, 465 and 587) can still send through a provider that
+  accepts SMTP on port **2525**, for example `SMTP_URL=smtp://API_KEY:SECRET_KEY@in-v3.mailjet.com:2525` (Mailjet). Port 2525 uses the
+  same STARTTLS rules as 587, so nothing else changes.
+- **Choose a provider that does not rewrite links.** The sign-in link keeps its secret after a `#` so it never reaches logs. Providers that
+  wrap every link in their own click-tracking redirect store that secret and show players a foreign address. Brevo does this for
+  transactional email and, as of this writing, cannot switch it off below its Enterprise plan. Mailjet and most others let you turn
+  click tracking off; do that in the provider's settings.
+- **Without your own domain,** you can still send by verifying a single sender address with the provider, but the email then comes
+  "from" that address (often a free-mail one) and many inboxes put such mail in spam. The sign-in screen already tells players to look
+  in their spam folder. Owning a domain and setting up its SPF/DKIM records with the provider fixes this.
 - **`APP_URL` is the address in every link.** It is never taken from a request, so nobody can make the site email a link to a
   look-alike address. Use `https://` in production (the server refuses anything else when `NODE_ENV=production`).
 - **Links work once and expire after 15 minutes** (`LOGIN_LINK_MINUTES`, 1 to 60). Only a hash of each link's secret is stored.
 - **Limits:** an address gets at most 5 links an hour (beyond that nothing is sent and nothing says so, so the limit cannot be used to
   find out who plays), and each client address is limited on the two sign-in endpoints. Behind a reverse proxy you control, set
-  `TRUST_PROXY=true` so the limit sees the real visitor and not the proxy.
+  `TRUST_PROXY=true` so the limit sees the real visitor and not the proxy (on Render use `CLIENT_IP_HEADER` instead, see "Deploying").
 - **Errors are visible:** if the mail server cannot be reached the person is told to try again, and the server logs the reason
   (never the address or the link).
 - **Sessions:** signing in gives the usual login token, valid 30 days. Tokens are stateless, so "Sign out" ends the session on that

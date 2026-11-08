@@ -17,7 +17,7 @@ const MIN = 60_000;
 let counter = 0;
 const unique = (who = 'ada') => `${who}.${process.pid}.${Date.now().toString(36)}.${++counter}@example.org`; // a shared database must not see repeats
 
-async function boot({ login = true, authLimit, trustProxy = false, mailer = createMemoryMailer(), emailLimit } = {}) {
+async function boot({ login = true, authLimit, trustProxy = false, clientIpHeader = null, mailer = createMemoryMailer(), emailLimit } = {}) {
   const clock = { t: new Date('2026-11-05T12:00:00Z') };
   const now = () => clock.t;
   const store = stores.makeStore();
@@ -25,7 +25,7 @@ async function boot({ login = true, authLimit, trustProxy = false, mailer = crea
   const errors = [];
   const logger = { error: (...a) => errors.push(a.join(' ')), log() {}, warn() {} };
   const service = login ? createEmailLogin({ store, mailer, auth, appUrl: APP_URL, now, logger, ...(emailLimit ? { emailLimit } : {}) }) : null;
-  const app = createApp({ store, auth, now, login: service, authLimit, trustProxy, logger });
+  const app = createApp({ store, auth, now, login: service, authLimit, trustProxy, clientIpHeader, logger });
   const server = await app.listen(0, '127.0.0.1');
   const port = server.address().port;
   const base = `http://127.0.0.1:${port}`;
@@ -203,6 +203,36 @@ scenario('login: behind a trusted proxy the client address comes from the proxy\
     assert.equal((await direct.requestLink(unique(), { 'x-forwarded-for': '203.0.113.1' })).status, 202);
     assert.equal((await direct.requestLink(unique(), { 'x-forwarded-for': '203.0.113.2' })).status, 429, 'without a proxy the header is ignored');
   } finally { await direct.close(); }
+});
+
+scenario('login: behind Render/Cloudflare the visitor comes from the proxy\'s own header, so visitors are counted separately and a forged X-Forwarded-For does not matter', async () => {
+  const s = await boot({ authLimit: { max: 1, windowMs: 60_000 }, clientIpHeader: 'cf-connecting-ip', trustProxy: true });
+  try {
+    const ask = (headers) => s.requestLink(unique(), headers);
+    assert.equal((await ask({ 'cf-connecting-ip': '203.0.113.1', 'x-forwarded-for': '203.0.113.1, 104.22.17.40' })).status, 202);
+    // Another visitor behind the very same Cloudflare edge address has their own allowance.
+    assert.equal((await ask({ 'cf-connecting-ip': '203.0.113.2', 'x-forwarded-for': '203.0.113.2, 104.22.17.40' })).status, 202);
+    // The first visitor again: limited, whatever they put in X-Forwarded-For.
+    assert.equal((await ask({ 'cf-connecting-ip': '203.0.113.1', 'x-forwarded-for': '198.51.100.77, 104.22.17.40' })).status, 429);
+    // IPv6 works, and a list uses its first entry.
+    assert.equal((await ask({ 'cf-connecting-ip': '2001:db8::1' })).status, 202);
+    assert.equal((await ask({ 'cf-connecting-ip': '2001:db8::1' })).status, 429);
+    assert.equal((await ask({ 'cf-connecting-ip': '203.0.113.9, 203.0.113.10' })).status, 202);
+    assert.equal((await ask({ 'cf-connecting-ip': '203.0.113.9' })).status, 429);
+  } finally { await s.close(); }
+});
+
+scenario('login: a client-address header that is missing or not an IP address is ignored, never used as a key', async () => {
+  const s = await boot({ authLimit: { max: 1, windowMs: 60_000 }, clientIpHeader: 'cf-connecting-ip' });
+  try {
+    // With no usable header every request falls back to the connection's own address: one shared bucket.
+    assert.equal((await s.requestLink(unique(), { 'cf-connecting-ip': 'not-an-ip' })).status, 202);
+    assert.equal((await s.requestLink(unique(), { 'cf-connecting-ip': '<script>' })).status, 429);
+    assert.equal((await s.requestLink(unique(), { 'cf-connecting-ip': 'x'.repeat(5000) })).status, 429);
+    assert.equal((await s.requestLink(unique())).status, 429);
+    assert.equal((await s.requestLink(unique(), { 'cf-connecting-ip': '203.0.113.50' })).status, 202, 'a real address still gets its own allowance');
+    assert.equal((await s.requestLink(unique(), { 'x-forwarded-for': '203.0.113.51' })).status, 429, 'X-Forwarded-For is not consulted when a header is configured');
+  } finally { await s.close(); }
 });
 
 scenario('login: if the email cannot be sent the person is told (503), nothing about the address or link reaches the log', async () => {

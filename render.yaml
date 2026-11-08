@@ -1,0 +1,31 @@
+# Render Blueprint: describes the web service so it can be created in one step (New > Blueprint, pointing at this repository).
+# The database is NOT created here: it lives on Aiven (see README, "Deploying"). Values marked sync: false are asked for
+# in the Render dashboard the first time, and are never stored in this file.
+services:
+  - type: web
+    name: nuclear-destruction
+    runtime: node
+    # (To try the free plan, change this to "free" and read README > Deploying: email must use port 2525.)
+    # "free" would put the service to sleep after 15 idle minutes, and the turn-deadline timer sleeps with it.
+    # A paid instance stays awake.
+    plan: starter
+    buildCommand: npm install && npm run migrate -- up   # also brings the database schema up to date on every deploy
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_SECRET
+        generateValue: true                 # Render creates a random secret once. Changing it signs everyone out.
+      - key: CLIENT_IP_HEADER
+        value: cf-connecting-ip             # Render sits behind Cloudflare; this is the visitor's real address (for rate limits)
+      - key: NODE_EXTRA_CA_CERTS
+        value: /etc/secrets/aiven-ca.pem    # upload Aiven's ca.pem as a Secret File named aiven-ca.pem
+      - key: DATABASE_URL
+        sync: false                         # the Aiven Service URI
+      - key: APP_URL
+        sync: false                         # this service's public address, e.g. https://nuclear-destruction.onrender.com
+      - key: SMTP_URL
+        sync: false
+      - key: MAIL_FROM
+        sync: false

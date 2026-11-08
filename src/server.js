@@ -15,6 +15,9 @@
 //   LOGIN_LINK_MINUTES  how long a link works, 1 to 60 (default 15)
 //   TRUST_PROXY         "true" only behind a reverse proxy you control: client addresses (for rate limits)
 //                       are then read from X-Forwarded-For
+//   CLIENT_IP_HEADER    name of a header in which the proxy puts the visitor's address, e.g. cf-connecting-ip on Render
+//                       (which sits behind Cloudflare, so the last X-Forwarded-For entry is not the visitor). Wins over
+//                       TRUST_PROXY. Only set it when every request really comes through that proxy.
 //   NODE_ENV            "production" refuses the console transport and a non-https APP_URL
 //   CORS_ORIGIN         one allowed browser origin, e.g. https://game.example.com
 //   WORKER_INTERVAL_MS  how often overdue turns are resolved (default 60000)
@@ -53,6 +56,8 @@ export function readConfig(env = process.env) {
   if (store === 'postgres' && !env.DATABASE_URL) errors.push('DATABASE_URL is required (or set STORE=memory for a throwaway in-memory server)');
   if ((env.AUTH_SECRET ?? '').length < 16) errors.push('AUTH_SECRET must be at least 16 characters');
   const loginLinkMinutes = whole('LOGIN_LINK_MINUTES', 15, 1, 60);
+  const clientIpHeader = env.CLIENT_IP_HEADER ? env.CLIENT_IP_HEADER.trim().toLowerCase() : null;
+  if (clientIpHeader && !/^[a-z0-9-]{1,64}$/.test(clientIpHeader)) errors.push('CLIENT_IP_HEADER must be a header name such as cf-connecting-ip');
   const production = env.NODE_ENV === 'production';
   const transport = env.MAIL_TRANSPORT || (env.SMTP_URL ? 'smtp' : null);
   let appUrl = null;
@@ -75,7 +80,7 @@ export function readConfig(env = process.env) {
   return {
     store, databaseUrl: env.DATABASE_URL, authSecret: env.AUTH_SECRET, port, host: env.HOST || '0.0.0.0',
     allowSignup: env.ALLOW_SIGNUP === 'true', corsOrigin: env.CORS_ORIGIN || null, workerIntervalMs, shutdownGraceMs,
-    trustProxy: env.TRUST_PROXY === 'true', loginLinkMinutes,
+    trustProxy: env.TRUST_PROXY === 'true', clientIpHeader, loginLinkMinutes,
     mail: transport ? { transport, appUrl, smtpUrl: env.SMTP_URL, from: env.MAIL_FROM } : null,
   };
 }
@@ -126,7 +131,7 @@ export async function startServer({ env = process.env, store = null, mailer = nu
       login = createEmailLogin({ store, mailer, auth, appUrl: config.mail.appUrl, ttlMs: config.loginLinkMinutes * 60_000, logger });
     }
     if (!login && !config.allowSignup) logger.warn('No way to sign in is configured: set MAIL_TRANSPORT (email links) or, for development, ALLOW_SIGNUP=true.');
-    const app = createApp({ store, auth, allowSignup: config.allowSignup, login, trustProxy: config.trustProxy, corsOrigin: config.corsOrigin, logger });
+    const app = createApp({ store, auth, allowSignup: config.allowSignup, login, trustProxy: config.trustProxy, clientIpHeader: config.clientIpHeader, corsOrigin: config.corsOrigin, logger });
     const worker = startWorker({ store, notify: app.notify, intervalMs: config.workerIntervalMs, logger });
     let server;
     try { server = await app.listen(config.port, config.host); } catch (err) { await worker.stop(); throw err; }

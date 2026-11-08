@@ -12,6 +12,7 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
+import { isIP } from 'node:net';
 import {
   startGame, submitSheet, getPackage, getSheetView, dryRunSheet, getHistory, getReplay,
 } from '../app/pipeline.js';
@@ -87,6 +88,7 @@ export function createApp({
   login = null,               // email-link sign-in: { requestLink({ email }), verifyLink({ token, displayName }) } (see login.js)
   authLimit = { max: 20, windowMs: 15 * 60_000 },   // per client address, for each of the two sign-in endpoints
   trustProxy = false,         // true only behind a reverse proxy you control: the client address is then read from X-Forwarded-For
+  clientIpHeader = null,      // behind a proxy that puts the visitor's address in one header (Render/Cloudflare: "cf-connecting-ip"); wins over trustProxy
   corsOrigin = null,          // e.g. 'https://game.example.com'
   writeLimit = { max: 60, windowMs: 60_000 },
   heartbeatMs = 25_000,
@@ -127,7 +129,11 @@ export function createApp({
   // ── Rate limiting for the sign-in endpoints (per client address, fixed window) ──
   const authWindows = new Map();
   const clientAddress = (req) => {
-    if (trustProxy) {
+    if (clientIpHeader) {
+      // The proxy sets this header itself, so it is trusted as given; anything that is not an IP address is ignored.
+      const first = String(req.headers[clientIpHeader] ?? '').split(',')[0].trim();
+      if (isIP(first)) return first;
+    } else if (trustProxy) {
       const hops = String(req.headers['x-forwarded-for'] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
       if (hops.length) return hops[hops.length - 1];   // the last entry is the one our own proxy appended
     }
