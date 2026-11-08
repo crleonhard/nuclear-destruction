@@ -99,8 +99,12 @@ Things specific to this setup:
 
 - **Free instances sleep after 15 idle minutes,** and the timer that closes turns at their deadline sleeps with them: deadlines pass late
   and the first visitor after a pause waits about a minute. A free uptime monitor (UptimeRobot, cron-job.org) requesting `/healthz`
-  every 10 minutes keeps it awake; Render does not support this officially. One always-on free service fits in the 750 free hours a month;
+  every 5 to 10 minutes keeps it awake (see "Keeping a free instance awake" below); Render does not support this officially. One always-on free service fits in the 750 free hours a month;
   a second one would not. Use a paid instance (`plan: starter` in `render.yaml`) for something dependable.
+- **Keeping a free instance awake.** Create a free account at UptimeRobot (50 monitors, 5-minute checks, non-commercial use) or Better Stack
+  (10 monitors, 3-minute checks), add one HTTP monitor for `https://<service-name>.onrender.com/healthz`, and set its interval to the
+  shortest the free plan allows (anything under 15 minutes works). `/healthz` answers both GET and HEAD. Do not point it at a page that
+  needs signing in. Turn on email alerts: a monitor that reports "down" often is also telling you the database is off.
 - **Free instances cannot send mail on ports 25, 465 or 587.** Use a provider on port 2525 (see "Signing in").
 - **`CLIENT_IP_HEADER=cf-connecting-ip`:** Render sits behind Cloudflare, so the sign-in rate limits need the visitor's real address from
   that header (the last `X-Forwarded-For` entry is a Cloudflare server). Do not use `TRUST_PROXY` on Render.

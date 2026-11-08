@@ -361,13 +361,16 @@ export function createApp({
         return await serveStatic(req, res, url.pathname);
       }
 
+      // HEAD (what many uptime monitors send) is answered for public, read-only GET endpoints such as /healthz: same
+      // status and headers, no body. Private routes and the event stream are not offered over HEAD.
+      const isHead = req.method === 'HEAD';
       let matched = null;
       let pathExists = false;
       for (const r of routes) {
         const params = r.match(url.pathname);
         if (!params) continue;
         pathExists = true;
-        if (r.method === req.method) { matched = { r, params }; break; }
+        if (isHead ? (r.method === 'GET' && !r.needsAuth) : r.method === req.method) { matched = { r, params }; break; }
       }
       if (!matched) throw pathExists ? err(405, 'METHOD_NOT_ALLOWED', 'Method not allowed') : err(404, 'NOT_FOUND', 'Not found');
 
@@ -376,7 +379,7 @@ export function createApp({
         userId = await auth.authenticate(req, url);
         if (userId == null) throw err(401, 'UNAUTHENTICATED', 'Missing, invalid or expired token');
       }
-      const isWrite = req.method !== 'GET';
+      const isWrite = req.method !== 'GET' && !isHead;
       if (isWrite && userId != null && limited(userId)) throw err(429, 'RATE_LIMITED', 'Too many requests; slow down');
 
       const body = isWrite && req.method !== 'DELETE' ? await readJson(req) : {};
