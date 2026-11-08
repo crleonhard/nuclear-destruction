@@ -81,23 +81,32 @@ parts (migrations 007 and 008, the new store methods, the schema test) have not 
 ## Deploying (Aiven database + Render web service)
 
 1. **Database (Aiven).** Create a PostgreSQL 16 service. From its Overview page copy the *Service URI* and download `ca.pem`.
-2. **Code.** Put this project in a Git repository on GitHub or GitLab (`node_modules` is already ignored).
-3. **Web service (Render).** New > Blueprint, pick the repository: Render reads `render.yaml`. When asked, fill in:
-   `DATABASE_URL` (the Aiven URI), `APP_URL` (this service's own address, e.g. `https://nuclear-destruction.onrender.com`),
-   `SMTP_URL` and `MAIL_FROM` (see "Signing in"). Then open the service > Environment > Secret Files, add a file named
-   `aiven-ca.pem` and paste the contents of Aiven's `ca.pem` (Aiven signs with its own CA; without this Node refuses the connection).
-   If `APP_URL` was not known before the first deploy, set it afterwards and redeploy.
-4. Every deploy runs `npm run migrate -- up` first, so the schema is always current. A failed migration fails the deploy.
+2. **Code.** Save Aiven's `ca.pem` as `certs/aiven-ca.pem` (it is a public certificate, safe to commit), then put the project in a Git
+   repository on GitHub or GitLab (`node_modules` is already ignored).
+3. **Web service (Render, free plan).** Dashboard > New > Web Service > pick the repository, then:
+   - Language **Node**, Instance type **Free**, Region: the one closest to your Aiven service.
+   - Build Command `npm install && npm run migrate -- up` (this also brings the database schema up to date on every deploy).
+   - Start Command `npm start`. Health Check Path `/healthz` (under Advanced).
+   - Environment variables: `NODE_ENV=production`, `AUTH_SECRET` (random; make one with
+     `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`), `DATABASE_URL` (the Aiven URI),
+     `NODE_EXTRA_CA_CERTS=certs/aiven-ca.pem`, `CLIENT_IP_HEADER=cf-connecting-ip`, `APP_URL` (the service's own address,
+     `https://<service-name>.onrender.com`), `SMTP_URL` and `MAIL_FROM` (see "Signing in").
+   If Render gives the service a different name than you expected, correct `APP_URL` and it redeploys.
+   (`render.yaml` describes the same service as a Blueprint, but Render may require a payment method for Blueprints even on the free plan.)
+4. A failed migration fails the deploy, so a bad schema never goes live.
 
 Things specific to this setup:
 
-- **Use a paid instance** (the blueprint says `starter`). A free Render instance sleeps after 15 idle minutes, and the timer that
-  closes turns at their deadline sleeps with it: deadlines would pass late, and the first visitor after a pause waits about a minute.
-  Run one instance only.
-- **`CLIENT_IP_HEADER=cf-connecting-ip`** is set by the blueprint. Render sits behind Cloudflare, so the sign-in rate limits need
-  the visitor's real address from that header (the last `X-Forwarded-For` entry is a Cloudflare server, and without any setting
-  every visitor would share one limit). Do not use `TRUST_PROXY` on Render.
-- **Locally against Aiven:** set `DATABASE_URL` and `NODE_EXTRA_CA_CERTS` (path to `ca.pem`) before `npm run migrate -- up`.
+- **Free instances sleep after 15 idle minutes,** and the timer that closes turns at their deadline sleeps with them: deadlines pass late
+  and the first visitor after a pause waits about a minute. A free uptime monitor (UptimeRobot, cron-job.org) requesting `/healthz`
+  every 10 minutes keeps it awake; Render does not support this officially. One always-on free service fits in the 750 free hours a month;
+  a second one would not. Use a paid instance (`plan: starter` in `render.yaml`) for something dependable.
+- **Free instances cannot send mail on ports 25, 465 or 587.** Use a provider on port 2525 (see "Signing in").
+- **`CLIENT_IP_HEADER=cf-connecting-ip`:** Render sits behind Cloudflare, so the sign-in rate limits need the visitor's real address from
+  that header (the last `X-Forwarded-For` entry is a Cloudflare server). Do not use `TRUST_PROXY` on Render.
+- **Aiven's free database can power off when idle.** The app's once-a-minute check should count as activity, but if the game ever shows
+  errors after a quiet spell, check the service in the Aiven console and power it on.
+- **Locally against Aiven:** set `DATABASE_URL` and `NODE_EXTRA_CA_CERTS=certs/aiven-ca.pem` before `npm run migrate -- up`.
   Do not run `npm run test:db` against a real service: it creates and drops databases.
 
 ## AI players

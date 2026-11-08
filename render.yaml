@@ -5,10 +5,10 @@ services:
   - type: web
     name: nuclear-destruction
     runtime: node
-    # (To try the free plan, change this to "free" and read README > Deploying: email must use port 2525.)
-    # "free" would put the service to sleep after 15 idle minutes, and the turn-deadline timer sleeps with it.
-    # A paid instance stays awake.
-    plan: starter
+    # Free plan: no card needed for a manually created service, but Render may ask for one when applying a Blueprint (see README >
+    # Deploying). A free service sleeps after 15 idle minutes, and the turn-deadline timer sleeps with it; "starter" stays awake.
+    # Email on the free plan must use SMTP port 2525 (Render blocks 25, 465 and 587 there).
+    plan: free
     buildCommand: npm install && npm run migrate -- up   # also brings the database schema up to date on every deploy
     startCommand: npm start
     healthCheckPath: /healthz
@@ -20,7 +20,7 @@ services:
       - key: CLIENT_IP_HEADER
         value: cf-connecting-ip             # Render sits behind Cloudflare; this is the visitor's real address (for rate limits)
       - key: NODE_EXTRA_CA_CERTS
-        value: /etc/secrets/aiven-ca.pem    # upload Aiven's ca.pem as a Secret File named aiven-ca.pem
+        value: certs/aiven-ca.pem           # Aiven's public ca.pem, committed to this repository (see certs/README.md)
       - key: DATABASE_URL
         sync: false                         # the Aiven Service URI
       - key: APP_URL
