@@ -51,7 +51,7 @@ test('spec: operations are complete and consistent', () => {
     }
     if (op.requestBody) assert.ok(op.requestBody.content['application/json'], `${label}: request body`);
   }
-  assert.equal(ids.size, 26);
+  assert.equal(ids.size, 27);
 });
 
 test('spec: documented examples conform to their schemas', () => {
@@ -122,18 +122,22 @@ test('schemaCheck: accepts good data and catches the mistakes it exists to catch
 
 const stores = await openStore();
 after(() => stores.close());
-const scenario = (name, fn) => test(labelFor(stores.kind) + name, fn);
+// scenario(name, fn) or scenario(name, { skip, ... }, fn): the options object, when given, comes second (as with node:test).
+const scenario = (name, a, b) => {
+  const [opts, fn] = typeof a === 'function' ? [{}, a] : [a, b];
+  return test(labelFor(stores.kind) + name, opts, fn);
+};
 
 const exercised = new Set(); // "METHOD /path status", shared across boots
 
-async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 60_000 }, email = false, authLimit, mailer = createMemoryMailer() } = {}) {
+async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 60_000 }, email = false, authLimit, mailer = createMemoryMailer(), maxOpenGamesPerUser = 0 } = {}) {
   const clock = { t: new Date('2026-11-01T00:00:00Z') };
   const now = () => clock.t;
   const store = stores.makeStore();
   const auth = createTokenAuth({ secret: 'a-test-secret-that-is-long-enough', now });
   const logger = { error() {} };
   const login = email ? createEmailLogin({ store, mailer, auth, appUrl: 'http://localhost:3000', now, logger }) : null;
-  const app = createApp({ store, auth, now, allowSignup, writeLimit, login, authLimit, logger });
+  const app = createApp({ store, auth, now, allowSignup, writeLimit, login, authLimit, maxOpenGamesPerUser, logger });
   const server = await app.listen(0, '127.0.0.1');
   const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -436,6 +440,34 @@ scenario('conformance: AI players in the lobby match the spec', async () => {
     const state = (await call(a.token, 'GET', P('state'), { id })).body;
     assert.equal(state.public.players.filter((x) => x.ai).length, 8);
     assert.equal(state.turn.submitted, 8, 'all eight AIs submitted at once');
+  } finally { await ctx.close(); }
+});
+
+scenario('conformance: the limit on open games and cancelling a game match the spec', async () => {
+  const ctx = await boot({ maxOpenGamesPerUser: 2 });
+  const { call } = ctx;
+  try {
+    const [a, b] = [await ctx.signup('Ann'), await ctx.signup('Ben')];
+    const first = await call(a.token, 'POST', G, { body: {} });
+    const second = await call(a.token, 'POST', G, { body: { aiPlayers: 2 } });
+    assert.deepEqual([first.status, second.status], [201, 201]);
+    const blocked = await call(a.token, 'POST', G, { body: {} });
+    assert.equal(blocked.status, 409);
+    assert.equal(blocked.body.errors[0].code, 'TOO_MANY_GAMES');
+    assert.match(blocked.body.errors[0].message, /2 games that are not finished \(the limit is 2\)/);
+    assert.equal((await call(b.token, 'POST', G, { body: {} })).status, 201, 'the limit is per person');
+
+    const ONE = `${G}/{id}`;
+    assert.equal((await call(b.token, 'DELETE', ONE, { id: first.body.gameId })).status, 403);
+    assert.equal((await call(a.token, 'DELETE', ONE, { id: 999999 })).status, 404);
+    assert.equal((await call(a.token, 'DELETE', ONE, { id: first.body.gameId })).status, 200);
+    assert.equal((await call(a.token, 'GET', P('lobby'), { id: first.body.gameId })).status, 404, 'a cancelled game is gone');
+    assert.equal((await call(a.token, 'POST', G, { body: {} })).status, 201, 'cancelling freed a place');
+
+    assert.equal((await call(a.token, 'POST', P('start'), { id: second.body.gameId })).status, 200);
+    const started = await call(a.token, 'DELETE', ONE, { id: second.body.gameId });
+    assert.equal(started.status, 409);
+    assert.equal(started.body.errors[0].code, 'ALREADY_STARTED');
   } finally { await ctx.close(); }
 });
 

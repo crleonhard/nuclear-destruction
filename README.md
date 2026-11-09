@@ -52,6 +52,8 @@ npm start                the production server (needs DATABASE_URL, AUTH_SECRET 
   `tests/http.test.js` and this file run on the in-memory store in `npm test`, and on PostgreSQL in `npm run test:db`.
 - `tests/ai-decide.test.js`, `tests/ai-play.test.js` and `tests/client-ai.test.js` check AI players: the decisions (hand-built situations and a fuzz of 4,000 random
   game states, every sheet validated by the real rules), the lobby, AI turns inside real games, fairness, and full self-played games.
+- `tests/game-limit.test.js` and `tests/client-cancel.test.js` check the limit on open games (per person, finished games stop counting, simultaneous requests on PostgreSQL)
+  and cancelling a game from its lobby.
 - `tests/login.test.js`, `tests/mail.test.js` and `tests/client-login.test.js` check email sign-in: the flow over real HTTP (single use, expiry,
   rate limits, no account discovery), the SMTP client against a scripted mail server over real TLS and STARTTLS, and the sign-in screens.
   `tests/server-process.test.js` also signs in through a real server process that delivers the email over SMTP.
@@ -77,6 +79,13 @@ database tests above have been run on Windows.
 Email sign-in and AI players are built and covered by the tests listed above, which pass on the in-memory store. Their PostgreSQL
 parts (migrations 007 and 008, the new store methods, the schema test) have not yet been run on PostgreSQL: run
 `npm run test:db:docker`.
+
+## Game limits
+
+A person may have at most **3 unfinished games they created** at once (set `MAX_OPEN_GAMES_PER_USER`; `0` means no limit). Both lobby and running
+games count; finished games do not, and games a person only joined do not. Past the limit, creating a game answers 409 `TOO_MANY_GAMES`.
+The creator can **cancel** a game that is still in its lobby (a "Cancel game" button, two clicks): it removes the game, everyone's seats and
+any AI players, and frees a place. This protects a small database from being filled with abandoned games and AI accounts.
 
 ## Continuous integration
 

@@ -18,6 +18,7 @@ export async function gameView(ctx) {
   let childKind = null;
   let stream = null;
   let disposed = false;
+  let creatorId = null;
 
   function make(kind) {
     if (kind === 'lobby') return createLobbyView({ ctx, gameId: id, resync: sync });
@@ -37,6 +38,7 @@ export async function gameView(ctx) {
       return;
     }
     if (disposed) return;
+    creatorId = lobby.game.creatorId;
     const member = lobby.seats.some((s) => s.userId === session.user?.id);
     const kind = lobby.game.status === 'LOBBY' ? 'lobby' : member ? 'play' : 'closed';
     if (kind !== childKind) {
@@ -51,6 +53,11 @@ export async function gameView(ctx) {
 
   function onEvent(event) {
     if (disposed) return;
+    if (event.type === 'game_cancelled') {
+      // The creator's own lobby screen has already said so and moved on; everyone else is told and sent back to their games.
+      if (session.user?.id !== creatorId) { ctx.flash('info', 'The creator cancelled this game.'); ctx.navigate('/'); }
+      return;
+    }
     // Anything that can change what kind of page this is goes back through the lobby check first.
     if (event.type === 'lobby_changed' || event.type === 'game_started' || (event.type === 'ready' && childKind === 'lobby')) { sync(); return; }
     child?.onEvent?.(event);

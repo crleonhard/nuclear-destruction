@@ -17,6 +17,7 @@
 - **Idempotent:** resolving a turn that is not OPEN, or whose number differs from `expectTurnNumber`, does nothing, so the deadline worker and early resolution can race safely. `lockGame` takes a row lock first.
 - **Start-of-turn state in the database:** after resolving, the pipeline applies `beginNormalTurn` (free third, $5M) or `beginBattleTurn` (war bonus) before saving, so the rows always show what players start the turn with.
 - **Missed turns:** a player with no saved sheet gets a `SERVER_DEFAULT` sheet row and the resolver counts the miss. A saved draft counts as submitted at the deadline.
+- **Game limits:** `createGame` takes `maxOpenGames` (the HTTP layer passes the configured value) and refuses with 409 `TOO_MANY_GAMES` when the creator already has that many unfinished games; the Postgres store locks the creator's row so concurrent requests cannot exceed it. `cancelGame` removes a lobby (creator only).
 - **AI players** are seats whose accounts are bots. `startGame` and `resolveTurn` call `playAiTurns` after they commit; both take `{ playAi: false }` for tests. When no living person is left, `playAiTurns` plays the rest of the game out at once (a flat loop, capped at 1,000 turns per call), and `resolveTurn` reports how it ended (`over`, `outcome`) so callers can notify clients.
 - **Reports** belong to the turn that produced them and are shown at the start of the next turn.
 - **Sheet payloads use resolver ids** (`"FRANCE"`, `"CUBA#1"`), not database ids. The HTTP layer should accept and return those.

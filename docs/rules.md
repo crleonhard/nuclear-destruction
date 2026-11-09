@@ -134,6 +134,12 @@ Once war is declared, the next turn is a battle turn, then normal, battle, and s
   sheet, or when the deadline passes. The only chance in the game is the auction tie-break, drawn from a seed
   that is kept secret until the game ends so that the whole game can be replayed exactly.
 
+### Game limits and cancelling
+- **A person can have only a few unfinished games they created at once** (3 by default; a deployment can change it or switch it off).
+  Games in the lobby and games in progress count. Finished games do not, and neither do games the person only joined.
+- **The creator can cancel a game that is still in its lobby.** The game, every seat and any AI players are removed, and a place is freed.
+  A game that has started cannot be cancelled: it ends by being played, or by players forfeiting.
+
 ### AI players
 - **Any seat can be an AI.** The creator can seat up to 8 AI players when creating a game, and add or remove them in the lobby
   (never after the game starts). They count towards the 3 to 9 players, take a random free country like any player who has not

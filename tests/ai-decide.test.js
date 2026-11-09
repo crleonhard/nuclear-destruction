@@ -249,11 +249,9 @@ test('fuzz: in thousands of random situations every AI sheet passes the real rul
     const me = living[Math.floor(rng() * living.length)];
     // Remembered spy targets as an AI leaves them: a player in slot 0 and minors in slots 1 and 2 (any of them may be gone now).
     const mem = state.players[me].spySlots;
-    const survivors = Object.values(state.minors).filter((m) => !m.destroyed);
     const anyMinor = () => (rng() < 0.6 && Object.keys(state.minors).length ? { kind: 'MINOR', id: Object.keys(state.minors)[Math.floor(rng() * 18)] } : null);
     mem[0] = rng() < 0.5 ? { kind: 'PLAYER', id: countries[Math.floor(rng() * countries.length)] } : null;
     mem[1] = anyMinor(); mem[2] = anyMinor();
-    void survivors;
     const persona = AI_PERSONAS[i % 3];
     const v = packageFromState(state, me, rng);
     const own = rng() < 0.5 ? [] : [{ turnNumber: 1, payload: { giveCashToMinors: Object.fromEntries(Object.keys(state.minors).slice(0, 3).map((id) => [id, 1 + Math.floor(rng() * 30)])) } }];

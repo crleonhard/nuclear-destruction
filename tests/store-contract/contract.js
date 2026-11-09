@@ -476,4 +476,43 @@ export function defineStoreContract(label, { makeStore, adapter }) {
     assert.equal((await submitSheet(store, { gameId: made.gameId, userId: person.id, payload: {}, final: true }, hours(1))).resolved, true);
     assert.deepEqual(await finalsOf(), [2, 2]);
   });
+
+  // ───────── limits and cancelling ─────────
+
+  t('open games: only unfinished games a person created are counted', async (store) => {
+    const a = await read(store, (tx) => tx.createUser('Creator A'));
+    const b = await read(store, (tx) => tx.createUser('Creator B'));
+    const count = (id) => read(store, (tx) => tx.countOpenGamesCreatedBy(id));
+    assert.equal(await count(a.id), 0);
+    const g1 = await read(store, (tx) => tx.insertGame({ creatorId: a.id, seed: 1, turnDeadlineHours: 24, forfeitAfterN: 5 }));
+    await read(store, (tx) => tx.insertGame({ creatorId: a.id, seed: 2, turnDeadlineHours: 24, forfeitAfterN: 5 }));
+    await read(store, (tx) => tx.insertGame({ creatorId: b.id, seed: 3, turnDeadlineHours: 24, forfeitAfterN: 5 }));
+    assert.equal(await count(a.id), 2, 'lobbies count');
+    assert.equal(await count(b.id), 1, 'and only the creator\'s own');
+    await read(store, (tx) => tx.deleteLobbyGame(g1));
+    assert.equal(await count(a.id), 1);
+  });
+
+  t('open games: a game that has started still counts (finished games are covered in tests/game-limit.test.js)', async (store) => {
+    const g = await started(store, { countries: COUNTRIES });
+    const creator = (await snap(store, g.gameId)).game.creatorId;
+    assert.equal((await snap(store, g.gameId)).game.status, 'ACTIVE');
+    assert.equal(await read(store, (tx) => tx.countOpenGamesCreatedBy(creator)), 1);
+  });
+
+  t('cancelling a lobby: the game and its seats go, a started game stays, an unknown game is a no-op', async (store) => {
+    const person = await read(store, (tx) => tx.createUser('Host'));
+    const made = await createGame(store, { userId: person.id, settings: { aiPlayers: 2 } });
+    assert.equal((await snap(store, made.gameId)).players.length, 3);
+    assert.equal(await read(store, (tx) => tx.deleteLobbyGame(made.gameId)), 1);
+    const after = await snap(store, made.gameId);
+    assert.equal(after.game, null);
+    assert.deepEqual(after.players, []);
+    assert.equal(await read(store, (tx) => tx.deleteLobbyGame(made.gameId)), 0, 'already gone');
+    assert.equal(await read(store, (tx) => tx.deleteLobbyGame(999999)), 0);
+
+    const running = await started(store, { countries: COUNTRIES });
+    assert.equal(await read(store, (tx) => tx.deleteLobbyGame(running.gameId)), 0, 'a started game is never deleted');
+    assert.equal((await snap(store, running.gameId)).game.status, 'ACTIVE');
+  });
 }

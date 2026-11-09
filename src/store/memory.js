@@ -254,6 +254,22 @@ class MemTx {
     if (startPopulation !== undefined) p.startPopulation = startPopulation;
   }
 
+  /** How many unfinished (lobby or running) games this person created. The Postgres version also serializes per person. */
+  async countOpenGamesCreatedBy(userId) {
+    return this.d.games.filter((g) => g.creatorId === userId && (g.status === 'LOBBY' || g.status === 'ACTIVE')).length;
+  }
+
+  /** Removes a game that is still in its lobby, with its seats. Returns 1 if removed, 0 if it was missing or had started. */
+  async deleteLobbyGame(gameId) {
+    const g = this.game(gameId);
+    if (!g || g.status !== 'LOBBY') return 0;
+    const ids = new Set(this.d.players.filter((p) => p.gameId === gameId).map((p) => p.id));
+    this.d.spySlots = this.d.spySlots.filter((x) => !ids.has(x.playerId));
+    this.d.players = this.d.players.filter((p) => p.gameId !== gameId);
+    this.d.games = this.d.games.filter((x) => x.id !== gameId);
+    return 1;
+  }
+
   async deletePlayer(playerId) {
     this.d.players = this.d.players.filter((p) => p.id !== playerId);
   }

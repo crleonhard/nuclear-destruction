@@ -32,6 +32,7 @@ export const TEST_FILES = [
   'tests/server-process.test.js',            // the real `node src/server.js`: boots on PostgreSQL, survives a restart, exits cleanly
   'tests/login.test.js',                     // email sign-in on PostgreSQL: single use, expiry, limits, concurrent opens
   'tests/ai-play.test.js',                   // AI players on PostgreSQL: lobby, taking turns, the worker safety net, self-play
+  'tests/game-limit.test.js',                // the limit on open games (incl. simultaneous requests) and cancelling a lobby, on PostgreSQL
   'tests/head.test.js',                      // HEAD requests (uptime monitors) on the PostgreSQL-backed server
 ];
 

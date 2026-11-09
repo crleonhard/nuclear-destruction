@@ -43,7 +43,7 @@ export function createApi({ tokens, fetchImpl = (...args) => globalThis.fetch(..
  */
 export function openStream(gameId, token, onEvent, EventSourceImpl = globalThis.EventSource) {
   const source = new EventSourceImpl(`/api/v1/games/${gameId}/stream?token=${encodeURIComponent(token)}`);
-  for (const type of ['ready', 'lobby_changed', 'game_started', 'player_submitted', 'turn_resolved', 'game_finished']) {
+  for (const type of ['ready', 'lobby_changed', 'game_started', 'game_cancelled', 'player_submitted', 'turn_resolved', 'game_finished']) {
     source.addEventListener(type, (e) => {
       let data = {};
       try { data = JSON.parse(e.data); } catch { /* ignore a malformed event */ }

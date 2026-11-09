@@ -300,6 +300,22 @@ class PgTx {
     if (startPopulation !== undefined) await this.q('UPDATE players SET start_population = $2 WHERE id = $1', [playerId, startPopulation]);
   }
 
+  /**
+   * How many unfinished (lobby or running) games this person created. Locks the person's row first, so two games
+   * created at the same moment cannot both slip under a limit.
+   */
+  async countOpenGamesCreatedBy(userId) {
+    await this.q('SELECT id FROM users WHERE id = $1 FOR UPDATE', [userId]);
+    const [r] = await this.q("SELECT count(*)::int AS c FROM games WHERE creator_id = $1 AND status IN ('LOBBY', 'ACTIVE')", [userId]);
+    return r.c;
+  }
+
+  /** Removes a game that is still in its lobby; its seats go with it (ON DELETE CASCADE). Returns 1 if removed, else 0. */
+  async deleteLobbyGame(gameId) {
+    const rows = await this.q("DELETE FROM games WHERE id = $1 AND status = 'LOBBY' RETURNING id", [gameId]);
+    return rows.length;
+  }
+
   async deletePlayer(playerId) {
     await this.q('DELETE FROM players WHERE id = $1', [playerId]);
   }

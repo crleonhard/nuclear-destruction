@@ -17,7 +17,7 @@ import {
   startGame, submitSheet, getPackage, getSheetView, dryRunSheet, getHistory, getReplay,
 } from '../app/pipeline.js';
 import {
-  createGame, joinGame, pickCountry, leaveGame, setStartPopulation, getLobby, myGames, addAiPlayer, removeAiPlayer,
+  createGame, joinGame, pickCountry, leaveGame, setStartPopulation, getLobby, myGames, addAiPlayer, removeAiPlayer, cancelGame,
 } from '../app/lobby.js';
 import { openapi } from './openapi.js';
 
@@ -88,6 +88,7 @@ export function createApp({
   login = null,               // email-link sign-in: { requestLink({ email }), verifyLink({ token, displayName }) } (see login.js)
   authLimit = { max: 20, windowMs: 15 * 60_000 },   // per client address, for each of the two sign-in endpoints
   trustProxy = false,         // true only behind a reverse proxy you control: the client address is then read from X-Forwarded-For
+  maxOpenGamesPerUser = 3,    // unfinished games one person may have created at once (0 = no limit)
   clientIpHeader = null,      // behind a proxy that puts the visitor's address in one header (Render/Cloudflare: "cf-connecting-ip"); wins over trustProxy
   corsOrigin = null,          // e.g. 'https://game.example.com'
   writeLimit = { max: 60, windowMs: 60_000 },
@@ -187,7 +188,7 @@ export function createApp({
   route('GET', '/api/v1/games', async ({ userId }) => myGames(store, { userId }));
 
   route('POST', '/api/v1/games', async ({ userId, body }) => {
-    const r = await createGame(store, { userId, settings: body });
+    const r = await createGame(store, { userId, settings: body, maxOpenGames: maxOpenGamesPerUser });
     return r.ok ? { status: 201, body: { gameId: r.gameId } } : r;
   });
 
@@ -205,6 +206,13 @@ export function createApp({
     if (!('country' in body)) throw err(422, 'TARGET_INVALID', 'Send { "country": "FRANCE" } or { "country": null }', 'country');
     const r = await pickCountry(store, { gameId: id, userId, country: body.country });
     if (r.ok) notify(id, { type: 'lobby_changed' });
+    return r;
+  });
+
+  route('DELETE', '/api/v1/games/:id', async ({ params, userId }) => {
+    const id = gameId(params);
+    const r = await cancelGame(store, { gameId: id, userId });
+    if (r.ok) notify(id, { type: 'game_cancelled' });
     return r;
   });
 

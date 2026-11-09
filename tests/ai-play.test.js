@@ -12,7 +12,11 @@ import { startWorker } from '../src/worker.js';
 
 const stores = await openStore();
 after(() => stores.close());
-const scenario = (name, fn) => test(labelFor(stores.kind) + name, fn);
+// scenario(name, fn) or scenario(name, { skip, ... }, fn): the options object, when given, comes second (as with node:test).
+const scenario = (name, a, b) => {
+  const [opts, fn] = typeof a === 'function' ? [{}, a] : [a, b];
+  return test(labelFor(stores.kind) + name, opts, fn);
+};
 
 const T0 = new Date('2026-11-01T00:00:00Z');
 const HOUR = 3600 * 1000;
@@ -231,16 +235,26 @@ scenario('turns: when only AI players are left, the rest of the game is played o
   assert.deepEqual([person.alive, person.forfeited], [false, true]);
   assert.equal(s.game.status, 'FINISHED', 'no further deadline was needed');
   assert.ok(s.game.turnNumber > 2, `the game ran ${s.game.turnNumber} turns inside that one call`);
-  assert.ok(['WIN', 'DRAW'].includes(s.game.outcome ?? 'WIN') || s.game.winnerPlayerId !== undefined);
   const survivors = s.players.filter((p) => p.alive);
   assert.ok(survivors.length <= 1, 'it was played to the end: one survivor, or none for a draw');
+  if (survivors.length === 1) {
+    assert.equal(s.game.outcome, 'WIN');
+    assert.equal(s.game.winnerPlayerId, survivors[0].id, 'and the lone survivor is the winner');
+  } else {
+    assert.equal(s.game.outcome, 'DRAW');
+  }
 });
 
-scenario('turns: the same happens when the last person is eliminated in battle (not only forfeited)', async () => {
-  const r = await selfPlay({ ai: 3 });                            // the silent person is a passive target and is wiped out
-  assert.equal(r.over, true);
-  assert.equal(r.s.game.status, 'FINISHED');
-  assert.ok(r.fastForwarded >= 0);
+scenario('turns: the same happens when the last person is eliminated in battle, not only forfeited', async () => {
+  // The silent person is a passive target. Across a few games at least one has them wiped out, after which the AIs finish alone.
+  let found = null;
+  for (let i = 0; i < 8 && !found; i++) {
+    const r = await selfPlay({ ai: 3 });
+    assert.equal(r.over, true);
+    if (r.fastForwarded > 0 && !r.s.players.find((p) => !r.personas[p.userId]).alive) found = r;
+  }
+  assert.ok(found, 'in 8 games, the person was never eliminated before the end (very unlikely: something is wrong)');
+  assert.equal(found.s.game.status, 'FINISHED');
 });
 
 scenario('turns: a stalemate cannot lock the server: one call plays at most the cap, then the game waits for the next deadline', async () => {
@@ -284,9 +298,11 @@ scenario('turns: an eliminated AI is left alone, and the AIs still alive keep pl
   // Eliminate one AI the way the resolver would, then open a fresh turn for everyone.
   const row = g.store.data.players.find((p) => p.id === doomed.id);
   Object.assign(row, { alive: false, population: 0, cash: 0, thirds: 0, missiles: 0, abms: 0, bonusMissiles: 0 });
-  g.store.data.sheets = g.store.data.sheets.filter((x) => x.playerId !== survivor.id);   // the survivor has not moved yet
+  // Neither AI has a sheet for the open turn, so the only thing that can keep the eliminated one quiet is that it is out.
+  g.store.data.sheets = g.store.data.sheets.filter((x) => x.playerId !== survivor.id && x.playerId !== doomed.id);
   const r = await playAiTurns(g.store, g.gameId, at(1));
-  assert.equal(r.submitted, 1, 'only the living AI without a sheet moves');
+  assert.equal(r.submitted, 1, 'only the living AI moves');
+  assert.ok(!(await g.snap()).sheets.some((x) => x.playerId === doomed.id), 'the eliminated AI submitted nothing');
   assert.deepEqual(r.failed, []);
   const after = await g.snap();
   assert.ok(after.sheets.some((x) => x.playerId === survivor.id && x.isFinal));

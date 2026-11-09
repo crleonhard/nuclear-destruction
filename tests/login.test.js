@@ -10,7 +10,11 @@ import { createMemoryMailer } from '../src/mail/mailer.js';
 
 const stores = await openStore();
 after(() => stores.close());
-const scenario = (name, fn) => test(labelFor(stores.kind) + name, fn);
+// scenario(name, fn) or scenario(name, { skip, ... }, fn): the options object, when given, comes second (as with node:test).
+const scenario = (name, a, b) => {
+  const [opts, fn] = typeof a === 'function' ? [{}, a] : [a, b];
+  return test(labelFor(stores.kind) + name, opts, fn);
+};
 
 const APP_URL = 'https://game.example.com';
 const MIN = 60_000;

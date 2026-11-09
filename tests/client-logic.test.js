@@ -180,6 +180,7 @@ test('api: the event stream passes the token in the URL, decodes events, ignores
   src.listeners.turn_resolved({ data: '{"type":"turn_resolved","turnNumber":3}' });
   src.listeners.player_submitted({ data: '{"finalCount":2,"activeCount":3}' });
   src.listeners.ready({ data: 'not json' });
+  assert.equal(typeof src.listeners.game_cancelled, 'function', 'a cancelled game is announced to everyone watching it');
   assert.deepEqual(seen, [{ type: 'turn_resolved', turnNumber: 3 }, { type: 'player_submitted', finalCount: 2, activeCount: 3 }, { type: 'ready' }]);
   stream.close();
   assert.equal(src.closed, true);

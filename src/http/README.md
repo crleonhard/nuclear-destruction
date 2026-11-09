@@ -67,6 +67,7 @@ DATABASE_URL=postgres://... AUTH_SECRET=<16+ random chars> APP_URL=https://... S
 | `MAIL_FROM` | | sender, `game@example.com` or `Name <game@example.com>` |
 | `LOGIN_LINK_MINUTES` | 15 | how long an emailed link works (1 to 60) |
 | `TRUST_PROXY` | off | `true` only behind a reverse proxy you control: client addresses for rate limits come from `X-Forwarded-For` |
+| `MAX_OPEN_GAMES_PER_USER` | 3 | unfinished games (lobby or running) one person may have created at once, 0 to 100; `0` = no limit |
 | `CLIENT_IP_HEADER` | | a header the proxy fills with the visitor's address, e.g. `cf-connecting-ip` on Render. Wins over `TRUST_PROXY`; values that are not IP addresses are ignored |
 | `NODE_ENV` | | `production` makes the server refuse the console mail transport and a non-https `APP_URL` |
 | `CORS_ORIGIN` | none | one allowed browser origin |

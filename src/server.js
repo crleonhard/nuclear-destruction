@@ -12,6 +12,8 @@
 //                       from this, never from request headers. Must be https:// in production.
 //   SMTP_URL            smtps://user:pass@host:465 or smtp://user:pass@host:587 (STARTTLS)
 //   MAIL_FROM           sender, e.g. "Nuclear Destruction <game@example.com>"
+//   MAX_OPEN_GAMES_PER_USER  unfinished games (lobby or running) one person may have created at once, 0 to 100
+//                       (default 3; 0 = no limit). Creators can cancel a game that is still in its lobby.
 //   LOGIN_LINK_MINUTES  how long a link works, 1 to 60 (default 15)
 //   TRUST_PROXY         "true" only behind a reverse proxy you control: client addresses (for rate limits)
 //                       are then read from X-Forwarded-For
@@ -56,6 +58,7 @@ export function readConfig(env = process.env) {
   if (store === 'postgres' && !env.DATABASE_URL) errors.push('DATABASE_URL is required (or set STORE=memory for a throwaway in-memory server)');
   if ((env.AUTH_SECRET ?? '').length < 16) errors.push('AUTH_SECRET must be at least 16 characters');
   const loginLinkMinutes = whole('LOGIN_LINK_MINUTES', 15, 1, 60);
+  const maxOpenGamesPerUser = whole('MAX_OPEN_GAMES_PER_USER', 3, 0, 100);
   const clientIpHeader = env.CLIENT_IP_HEADER ? env.CLIENT_IP_HEADER.trim().toLowerCase() : null;
   if (clientIpHeader && !/^[a-z0-9-]{1,64}$/.test(clientIpHeader)) errors.push('CLIENT_IP_HEADER must be a header name such as cf-connecting-ip');
   const production = env.NODE_ENV === 'production';
@@ -80,7 +83,7 @@ export function readConfig(env = process.env) {
   return {
     store, databaseUrl: env.DATABASE_URL, authSecret: env.AUTH_SECRET, port, host: env.HOST || '0.0.0.0',
     allowSignup: env.ALLOW_SIGNUP === 'true', corsOrigin: env.CORS_ORIGIN || null, workerIntervalMs, shutdownGraceMs,
-    trustProxy: env.TRUST_PROXY === 'true', clientIpHeader, loginLinkMinutes,
+    trustProxy: env.TRUST_PROXY === 'true', clientIpHeader, loginLinkMinutes, maxOpenGamesPerUser,
     mail: transport ? { transport, appUrl, smtpUrl: env.SMTP_URL, from: env.MAIL_FROM } : null,
   };
 }
@@ -131,7 +134,7 @@ export async function startServer({ env = process.env, store = null, mailer = nu
       login = createEmailLogin({ store, mailer, auth, appUrl: config.mail.appUrl, ttlMs: config.loginLinkMinutes * 60_000, logger });
     }
     if (!login && !config.allowSignup) logger.warn('No way to sign in is configured: set MAIL_TRANSPORT (email links) or, for development, ALLOW_SIGNUP=true.');
-    const app = createApp({ store, auth, allowSignup: config.allowSignup, login, trustProxy: config.trustProxy, clientIpHeader: config.clientIpHeader, corsOrigin: config.corsOrigin, logger });
+    const app = createApp({ store, auth, allowSignup: config.allowSignup, login, trustProxy: config.trustProxy, clientIpHeader: config.clientIpHeader, maxOpenGamesPerUser: config.maxOpenGamesPerUser, corsOrigin: config.corsOrigin, logger });
     const worker = startWorker({ store, notify: app.notify, intervalMs: config.workerIntervalMs, logger });
     let server;
     try { server = await app.listen(config.port, config.host); } catch (err) { await worker.stop(); throw err; }

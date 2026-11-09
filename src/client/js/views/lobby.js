@@ -7,6 +7,7 @@ export function createLobbyView({ ctx, gameId, resync }) {
   const el = h('div');
   let data = null;
   let busy = false;
+  let confirmingCancel = false;
 
   async function act(fn) {
     if (busy) return;
@@ -14,6 +15,34 @@ export function createLobbyView({ ctx, gameId, resync }) {
     render();
     try { await fn(); } catch (err) { flash('error', err.message); } finally { busy = false; }
     await resync();
+  }
+
+  /** Two clicks, no dialog: the first asks, the second cancels. On success the creator goes straight back to their games. */
+  async function cancelGame() {
+    if (busy) return;
+    busy = true;
+    render();
+    try {
+      await api.del(`${base}`);   // DELETE /api/v1/games/{id}
+      flash('ok', 'Game cancelled.');
+      ctx.navigate('/');
+      return;
+    } catch (err) { flash('error', err.message); }
+    busy = false;
+    confirmingCancel = false;
+    await resync();
+  }
+
+  function cancelCard() {
+    return h('section', { class: 'card' },
+      h('h2', {}, 'Cancel this game'),
+      confirmingCancel
+        ? [h('p', { role: 'alert' }, 'This removes the game, everyone\'s seats and any AI players. It cannot be undone.'),
+          h('button', { type: 'button', class: 'danger', disabled: busy, onClick: cancelGame }, 'Yes, cancel the game'),
+          ' ',
+          h('button', { type: 'button', disabled: busy, onClick: () => { confirmingCancel = false; render(); } }, 'Keep it')]
+        : [h('p', { class: 'hint' }, 'Not going ahead? Cancelling frees one of your places for new games.'),
+          h('button', { type: 'button', class: 'danger', disabled: busy, onClick: () => { confirmingCancel = true; render(); } }, 'Cancel game')]);
   }
 
   function copyInvite(input, button) {
@@ -109,7 +138,9 @@ export function createLobbyView({ ctx, gameId, resync }) {
             h('p', {}, need > 0 ? `Waiting for ${plural(need, 'more player')} (at least ${game.limits.minPlayers} are needed).` : 'Everyone here will play. Players without a country are assigned one at random.'),
             h('button', { class: 'primary', disabled: busy || need > 0, onClick: () => act(() => api.post(`${base}/start`)) }, 'Start game')]
           : [h('h2', {}, 'Waiting to start'), h('p', {}, `${creatorName} will start the game when everyone is ready.`),
-            h('button', { class: 'danger', disabled: busy, onClick: () => act(async () => { await api.del(`${base}/membership`); flash('info', 'You left the game.'); }) }, 'Leave game')]) : null);
+            h('button', { class: 'danger', disabled: busy, onClick: () => act(async () => { await api.del(`${base}/membership`); flash('info', 'You left the game.'); }) }, 'Leave game')]) : null,
+
+      isCreator ? cancelCard() : null);
   }
 
   return {

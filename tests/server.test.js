@@ -144,6 +144,26 @@ test('config: CLIENT_IP_HEADER is lower-cased, optional, and must look like a he
   }
 });
 
+test('config: MAX_OPEN_GAMES_PER_USER defaults to 3, accepts 0 (no limit) up to 100, and rejects anything else', () => {
+  assert.equal(readConfig(MAIL_BASE).maxOpenGamesPerUser, 3);
+  assert.equal(readConfig({ ...MAIL_BASE, MAX_OPEN_GAMES_PER_USER: '0' }).maxOpenGamesPerUser, 0);
+  assert.equal(readConfig({ ...MAIL_BASE, MAX_OPEN_GAMES_PER_USER: '100' }).maxOpenGamesPerUser, 100);
+  for (const bad of ['-1', '101', '2.5', 'many']) assert.equal(problems({ ...MAIL_BASE, MAX_OPEN_GAMES_PER_USER: bad }).length, 1, bad);
+});
+
+test('startup: the limit on open games is enforced by the running server', async () => {
+  const running = await startServer({ env: env({ ALLOW_SIGNUP: 'true', MAX_OPEN_GAMES_PER_USER: '1' }), logger: quiet() });
+  try {
+    const base = `http://127.0.0.1:${running.port}`;
+    const json = (path, token, body) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body ?? {}) });
+    const { token } = await (await json('/api/v1/users', null, { displayName: 'Ann' })).json();
+    assert.equal((await json('/api/v1/games', token)).status, 201);
+    const second = await json('/api/v1/games', token);
+    assert.equal(second.status, 409);
+    assert.equal((await second.json()).errors[0].code, 'TOO_MANY_GAMES');
+  } finally { await running.stop(); }
+});
+
 test('config: production refuses the console transport and a non-https site address', () => {
   assert.deepEqual(problems({ ...MAIL_BASE, NODE_ENV: 'production', MAIL_TRANSPORT: 'console', APP_URL: 'https://game.example.com' }),
     ['MAIL_TRANSPORT=console prints sign-in links to the log, so it is not allowed when NODE_ENV=production']);

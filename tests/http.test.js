@@ -7,17 +7,21 @@ import { startWorker } from '../src/worker.js';
 
 const stores = await openStore();
 after(() => stores.close());
-const scenario = (name, fn) => test(labelFor(stores.kind) + name, fn);
+// scenario(name, fn) or scenario(name, { skip, ... }, fn): the options object, when given, comes second (as with node:test).
+const scenario = (name, a, b) => {
+  const [opts, fn] = typeof a === 'function' ? [{}, a] : [a, b];
+  return test(labelFor(stores.kind) + name, opts, fn);
+};
 
 const SECRET = 'a-test-secret-that-is-long-enough';
 const HOUR = 3600 * 1000;
 
-async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 60_000 } } = {}) {
+async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 60_000 }, maxOpenGamesPerUser = 3 } = {}) {
   const clock = { t: new Date('2026-11-01T00:00:00Z') };
   const now = () => clock.t;
   const store = stores.makeStore();
   const auth = createTokenAuth({ secret: SECRET, now });
-  const app = createApp({ store, auth, now, allowSignup, writeLimit, logger: { error() {} } });
+  const app = createApp({ store, auth, now, allowSignup, writeLimit, maxOpenGamesPerUser, logger: { error() {} } });
   const server = await app.listen(0, '127.0.0.1');
   const base = `http://127.0.0.1:${server.address().port}`;
   const seen = []; // every response body text, for leak checks
@@ -146,7 +150,7 @@ scenario('signup: off by default, validated when on', async () => {
 });
 
 scenario('rate limit: writes are limited per user; reads are not', async () => {
-  const ctx = await boot({ writeLimit: { max: 3, windowMs: 60_000 } });
+  const ctx = await boot({ writeLimit: { max: 3, windowMs: 60_000 }, maxOpenGamesPerUser: 0 });   // this test is about rate limits, not the game limit
   try {
     const u = await ctx.signup('Ann');
     const codes = [];
