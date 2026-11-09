@@ -78,6 +78,18 @@ Email sign-in and AI players are built and covered by the tests listed above, wh
 parts (migrations 007 and 008, the new store methods, the schema test) have not yet been run on PostgreSQL: run
 `npm run test:db:docker`.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request, in three jobs:
+
+- **Tests:** the whole suite on Node 20 and 22, with in-memory data.
+- **PostgreSQL:** the same code against a real PostgreSQL 16 (`npm run test:db`): the store, migrations up, all the way down and up again,
+  constraints, email sign-in, AI players, the HTTP layer and the API contract.
+- **Browser:** plays a full game through the real UI in Chromium (`npm run e2e`); screenshots are kept as a downloadable artifact for 7 days.
+
+To make Render wait for green checks, set the service's Auto-Deploy to "After CI checks pass" (Settings > Build & Deploy). Do that once CI
+has been green for a few runs, so a check you have not seen pass yet cannot block a deploy.
+
 ## Deploying (Aiven database + Render web service)
 
 1. **Database (Aiven).** Create a PostgreSQL 16 service. From its Overview page copy the *Service URI* and download `ca.pem`.

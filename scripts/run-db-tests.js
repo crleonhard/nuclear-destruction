@@ -30,6 +30,9 @@ export const TEST_FILES = [
   'tests/http.test.js',                      // the web layer on top of the PostgreSQL store
   'tests/openapi.test.js',                   // every response in a full game checked against the API spec
   'tests/server-process.test.js',            // the real `node src/server.js`: boots on PostgreSQL, survives a restart, exits cleanly
+  'tests/login.test.js',                     // email sign-in on PostgreSQL: single use, expiry, limits, concurrent opens
+  'tests/ai-play.test.js',                   // AI players on PostgreSQL: lobby, taking turns, the worker safety net, self-play
+  'tests/head.test.js',                      // HEAD requests (uptime monitors) on the PostgreSQL-backed server
 ];
 
 export const USAGE = `Usage: node scripts/run-db-tests.js [options]

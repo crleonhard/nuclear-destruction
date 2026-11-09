@@ -1,0 +1,98 @@
+# Continuous integration: runs the tests on every push to main and on every pull request.
+#
+#   test      the whole suite on Node 20 and 22 with in-memory data (fast; needs no database)
+#   database  the same code on a real PostgreSQL 16: the store, migrations (up, all the way down, up again), constraints,
+#             email sign-in, AI players, the HTTP layer and the API contract
+#   browser   plays a full game through the real UI in Chromium (three browsers) and checks the end-of-game screens
+#
+# Render can wait for these checks before deploying (service > Settings > Build & Deploy > Auto-Deploy: "After CI checks pass").
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install dependencies
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Run tests
+        run: npm test
+
+  database:
+    name: Tests on PostgreSQL 16
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Run the database tests
+        # The runner creates a scratch database on this server, applies every migration, rolls them all back and applies them
+        # again, runs the suites against it, then drops it.
+        run: npm run test:db -- --url postgres://postgres:postgres@localhost:5432/postgres
+
+  browser:
+    name: Browser test (Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Install Playwright and Chromium
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+      - name: Play a full game through the UI
+        run: npm run e2e -- --shots e2e-shots
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: e2e-shots
+          if-no-files-found: ignore
+          retention-days: 7
