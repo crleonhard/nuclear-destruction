@@ -59,6 +59,8 @@ export const ERROR_CODES = [
   'PERSONA_INVALID',
   // game limits
   'TOO_MANY_GAMES',
+  // turn emails
+  'EMAIL_REQUIRED', 'NOT_BOOLEAN',
 ];
 
 const schemas = {
@@ -77,6 +79,11 @@ const schemas = {
 
   // ── Users ──
   User: obj({ id: int({ minimum: 1 }), displayName: nullable(str()) }),
+  NotificationSettings: obj({
+    available: { type: 'boolean', description: 'False when this server sends no email at all, so there is nothing to switch on.' },
+    canEnable: { type: 'boolean', description: 'False for accounts without an email address (for example name-only development accounts).' },
+    turnEmails: { type: 'boolean', description: 'True when the person opted in to turn emails. Off by default.' },
+  }),
 
   // ── Sheets ──
   SpyTarget: obj({ kind: str({ enum: ['PLAYER', 'MINOR'] }), id: { oneOf: [ref('Country'), ref('MinorId')] } }),
@@ -324,7 +331,27 @@ const paths = {
     }),
   },
   '/api/v1/me': {
-    get: operation({ id: 'getMe', tag: 'Account', summary: 'The signed-in user', responses: { ...ok('The caller.', obj({ user: ref('User') })), ...errs(...READ) } }),
+    get: operation({ id: 'getMe', tag: 'Account', summary: 'The signed-in user and their email settings', responses: { ...ok('The caller.', obj({ user: ref('User'), notifications: ref('NotificationSettings') })), ...errs(...READ) } }),
+  },
+  '/api/v1/me/notifications': {
+    put: operation({
+      id: 'setTurnEmails', tag: 'Account', summary: 'Opt in to or out of turn emails',
+      description: [
+        'Turn emails are off until a person turns them on. When on, the person gets one email when a turn opens (only for turns that open after they opted in)',
+        'and one reminder shortly before the deadline if they have not submitted final orders. Only accounts with an email address can opt in (409 `EMAIL_REQUIRED` otherwise).',
+        'Answers 404 when the server sends no email. Repeating the same value is harmless.',
+      ].join(' '),
+      requestBody: { required: true, content: jsonBody(obj({ turnEmails: { type: 'boolean' } })) },
+      responses: { ...ok('Saved.', obj({ turnEmails: { type: 'boolean' } })), ...errs(...WRITE, 404, 409, 422) },
+    }),
+  },
+  '/api/v1/auth/unsubscribe': {
+    post: operation({
+      id: 'unsubscribeTurnEmails', tag: 'Account', security: [], summary: 'Stop turn emails from the link in an email',
+      description: 'Send the token from the link at the bottom of a turn email (the part after `#/unsubscribe/`). It needs no sign-in, never expires and can only switch turn emails off. Limited per client address.',
+      requestBody: { required: true, content: jsonBody(obj({ token: str({ minLength: 45, maxLength: 60 }) })) },
+      responses: { ...ok('Turn emails are off.', obj({ turnEmails: { const: false } })), ...errs(400, 404, 413, 415, 429, 500) },
+    }),
   },
   '/api/v1/games': {
     get: operation({ id: 'listGames', tag: 'Lobby', summary: 'Games the caller has joined', responses: { ...ok('Newest first.', obj({ games: arr(ref('GameSummary')) })), ...errs(...READ) } }),

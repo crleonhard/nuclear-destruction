@@ -16,6 +16,7 @@ src/
   ai/          AI players: play styles and the decision code (see src/ai/README.md)
   store/       where state lives: memory.js (tests, local) and postgres.js
   http/        the web layer: routes, tokens, email-link sign-in, OpenAPI description, and serving the client
+                (turn emails live in app/notifications.js)
   mail/        sending email: a small SMTP client and the mailers (smtp, console, memory)
   client/      the browser client: plain HTML, CSS and JavaScript (see src/client/README.md)
   worker.js    resolves turns whose deadline has passed
@@ -57,6 +58,8 @@ npm start                the production server (needs DATABASE_URL, AUTH_SECRET 
 - `tests/login.test.js`, `tests/mail.test.js` and `tests/client-login.test.js` check email sign-in: the flow over real HTTP (single use, expiry,
   rate limits, no account discovery), the SMTP client against a scripted mail server over real TLS and STARTTLS, and the sign-in screens.
   `tests/server-process.test.js` also signs in through a real server process that delivers the email over SMTP.
+- `tests/notifications.test.js` and `tests/client-notifications.test.js` check turn emails: who may opt in, who gets which mail and when, that nothing
+  is sent twice (including two workers at once, on PostgreSQL), the daily cap, a failing mail server, and the one-click stop link and its page.
 - `tests/client-logic.test.js` and `tests/client.test.js` check the browser client without a browser: its pure logic, how the
   server delivers it (security headers, path traversal), that it never uses unsafe DOM calls, and that every API call it makes is in the spec.
   `npm run e2e` then drives it in a real browser.
@@ -76,9 +79,9 @@ The browser client is verified in a real browser by `npm run e2e` (a full three-
 phone width, dark mode, accessibility names, no console or CSP errors). It has been run on Linux only; the PostgreSQL
 database tests above have been run on Windows.
 
-Email sign-in and AI players are built and covered by the tests listed above, which pass on the in-memory store. Their PostgreSQL
-parts (migrations 007 and 008, the new store methods, the schema test) have not yet been run on PostgreSQL: run
-`npm run test:db:docker`.
+Email sign-in, AI players, the game limit and turn emails are covered by the tests listed above. Migration 009 and the PostgreSQL versions of the
+turn-email store methods have so far only been run through the in-memory store (there was no PostgreSQL where they were written), so your CI's
+`database` job is their first real run: check its result for `tests/notifications.test.js` and the schema test, or run `npm run test:db:docker`.
 
 ## Game limits
 
@@ -86,6 +89,37 @@ A person may have at most **3 unfinished games they created** at once (set `MAX_
 games count; finished games do not, and games a person only joined do not. Past the limit, creating a game answers 409 `TOO_MANY_GAMES`.
 The creator can **cancel** a game that is still in its lobby (a "Cancel game" button, two clicks): it removes the game, everyone's seats and
 any AI players, and frees a place. This protects a small database from being filled with abandoned games and AI accounts.
+
+## Turn emails (opt-in)
+
+Players can ask for two kinds of email, from a checkbox on their home page (**off until they turn it on**; only accounts that signed in with an
+email address can):
+
+- **"Turn N of game #G is open"**: once per turn, only for turns that open after they opted in (switching it on never triggers a burst about turns already running).
+- **"Turn N closes in about H hours"**: once per turn, `NOTIFY_REMINDER_HOURS` (default 4) before the deadline, and only if they have not submitted final
+  orders. In a short turn the reminder waits for the last third, so it never lands right behind the "open" mail. A saved draft is not "final", so
+  someone who only saved a draft is still reminded.
+
+How it behaves:
+
+- **Each mail goes out at most once** per person, game, turn and kind (`turn_notifications`, migration 009). The server records the mail *before* handing it to
+  the mail provider, so two workers can never both send it. If the provider refuses, the record is removed and the next pass (about a minute later) tries
+  again; a crash in the instant between record and send loses that one mail rather than sending it twice.
+- **Never** sent to someone who did not opt in, for a turn whose deadline has passed, to someone who already submitted, to an eliminated or forfeited
+  player, or to an AI player.
+- **Caps for a free mail plan:** at most `NOTIFY_DAILY_LIMIT` mails (default 150) in any rolling 24 hours and 40 per worker pass. Mailjet's free plan allows
+  200 a day *in total*, shared with sign-in links, so the default leaves room for about 50 of those. Mail over the cap just waits; it is worked out again from
+  the game state on the next pass and is dropped by itself once its turn has been resolved. Reminders go before "open" mails when mail is short.
+- **Every mail has a stop link** (`/#/unsubscribe/<token>`). The token is the user number plus an HMAC made from `AUTH_SECRET` with its own key, so it is
+  not a login token and can only switch the emails off. It needs no sign-in and does not expire. The page asks for one click first, like the sign-in
+  page, so mail scanners that open links do not switch it off. Changing `AUTH_SECRET` also makes old stop links stop working (people can still switch
+  the emails off on their home page).
+- **Nothing secret is in a mail**: the game number, the turn, your own country and the deadline (in UTC), plus a link to the game.
+- **Spam:** without your own domain these come from a free-mail address and may land in spam, like the sign-in links; the checkbox says so. A domain with
+  SPF/DKIM fixes both.
+- **Worker:** emails are sent at the end of each worker pass (`src/worker.js`), after turns are resolved and AI players have moved, so a new turn's mail goes
+  out in the same pass that opens it. A mail problem is logged and never stops turn resolution. On Render's free plan the worker sleeps when the service
+  does, so keep the uptime monitor pinging `/healthz`.
 
 ## Continuous integration
 

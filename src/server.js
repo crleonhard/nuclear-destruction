@@ -15,6 +15,10 @@
 //   MAX_OPEN_GAMES_PER_USER  unfinished games (lobby or running) one person may have created at once, 0 to 100
 //                       (default 3; 0 = no limit). Creators can cancel a game that is still in its lobby.
 //   LOGIN_LINK_MINUTES  how long a link works, 1 to 60 (default 15)
+//   Turn emails are opt-in per player and available whenever email is configured (see above):
+//   NOTIFY_REMINDER_HOURS  how long before a deadline the reminder goes out, 0 to 72 (default 4; 0 = no reminders)
+//   NOTIFY_DAILY_LIMIT  turn emails in any rolling 24 hours, 0 to 100000 (default 150; 0 = no cap). Keep it under your
+//                       mail plan's daily allowance minus the sign-in links you expect (Mailjet free: 200 a day in total).
 //   TRUST_PROXY         "true" only behind a reverse proxy you control: client addresses (for rate limits)
 //                       are then read from X-Forwarded-For
 //   CLIENT_IP_HEADER    name of a header in which the proxy puts the visitor's address, e.g. cf-connecting-ip on Render
@@ -34,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { createApp } from './http/app.js';
 import { createTokenAuth } from './http/auth.js';
 import { createEmailLogin } from './http/login.js';
+import { createNotifications } from './app/notifications.js';
 import { createConsoleMailer, createSmtpMailer } from './mail/mailer.js';
 import { parseSmtpUrl, parseMailbox } from './mail/smtp.js';
 import { startWorker } from './worker.js';
@@ -59,6 +64,8 @@ export function readConfig(env = process.env) {
   if ((env.AUTH_SECRET ?? '').length < 16) errors.push('AUTH_SECRET must be at least 16 characters');
   const loginLinkMinutes = whole('LOGIN_LINK_MINUTES', 15, 1, 60);
   const maxOpenGamesPerUser = whole('MAX_OPEN_GAMES_PER_USER', 3, 0, 100);
+  const notifyReminderHours = whole('NOTIFY_REMINDER_HOURS', 4, 0, 72);
+  const notifyDailyLimit = whole('NOTIFY_DAILY_LIMIT', 150, 0, 100_000);
   const clientIpHeader = env.CLIENT_IP_HEADER ? env.CLIENT_IP_HEADER.trim().toLowerCase() : null;
   if (clientIpHeader && !/^[a-z0-9-]{1,64}$/.test(clientIpHeader)) errors.push('CLIENT_IP_HEADER must be a header name such as cf-connecting-ip');
   const production = env.NODE_ENV === 'production';
@@ -83,7 +90,7 @@ export function readConfig(env = process.env) {
   return {
     store, databaseUrl: env.DATABASE_URL, authSecret: env.AUTH_SECRET, port, host: env.HOST || '0.0.0.0',
     allowSignup: env.ALLOW_SIGNUP === 'true', corsOrigin: env.CORS_ORIGIN || null, workerIntervalMs, shutdownGraceMs,
-    trustProxy: env.TRUST_PROXY === 'true', clientIpHeader, loginLinkMinutes, maxOpenGamesPerUser,
+    trustProxy: env.TRUST_PROXY === 'true', clientIpHeader, loginLinkMinutes, maxOpenGamesPerUser, notifyReminderHours, notifyDailyLimit,
     mail: transport ? { transport, appUrl, smtpUrl: env.SMTP_URL, from: env.MAIL_FROM } : null,
   };
 }
@@ -122,6 +129,7 @@ export async function startServer({ env = process.env, store = null, mailer = nu
 
     const auth = createTokenAuth({ secret: config.authSecret });
     let login = null;
+    let notifications = null;
     if (config.mail) {
       if (!mailer) {
         if (config.mail.transport === 'console') {
@@ -132,10 +140,11 @@ export async function startServer({ env = process.env, store = null, mailer = nu
         }
       }
       login = createEmailLogin({ store, mailer, auth, appUrl: config.mail.appUrl, ttlMs: config.loginLinkMinutes * 60_000, logger });
+      notifications = createNotifications({ store, mailer, secret: config.authSecret, appUrl: config.mail.appUrl, reminderHours: config.notifyReminderHours, dailyLimit: config.notifyDailyLimit, logger });
     }
     if (!login && !config.allowSignup) logger.warn('No way to sign in is configured: set MAIL_TRANSPORT (email links) or, for development, ALLOW_SIGNUP=true.');
-    const app = createApp({ store, auth, allowSignup: config.allowSignup, login, trustProxy: config.trustProxy, clientIpHeader: config.clientIpHeader, maxOpenGamesPerUser: config.maxOpenGamesPerUser, corsOrigin: config.corsOrigin, logger });
-    const worker = startWorker({ store, notify: app.notify, intervalMs: config.workerIntervalMs, logger });
+    const app = createApp({ store, auth, allowSignup: config.allowSignup, login, notifications, trustProxy: config.trustProxy, clientIpHeader: config.clientIpHeader, maxOpenGamesPerUser: config.maxOpenGamesPerUser, corsOrigin: config.corsOrigin, logger });
+    const worker = startWorker({ store, notify: app.notify, notifier: notifications, intervalMs: config.workerIntervalMs, logger });
     let server;
     try { server = await app.listen(config.port, config.host); } catch (err) { await worker.stop(); throw err; }
     const port = server.address().port;

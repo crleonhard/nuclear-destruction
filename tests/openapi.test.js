@@ -6,6 +6,7 @@ import { openStore, labelFor } from './support/stores.js';
 import { createApp } from '../src/http/app.js';
 import { createTokenAuth } from '../src/http/auth.js';
 import { createEmailLogin } from '../src/http/login.js';
+import { createNotifications } from '../src/app/notifications.js';
 import { createMemoryMailer } from '../src/mail/mailer.js';
 import { startWorker } from '../src/worker.js';
 import { openapi, ERROR_CODES } from '../src/http/openapi.js';
@@ -51,7 +52,7 @@ test('spec: operations are complete and consistent', () => {
     }
     if (op.requestBody) assert.ok(op.requestBody.content['application/json'], `${label}: request body`);
   }
-  assert.equal(ids.size, 27);
+  assert.equal(ids.size, 29);
 });
 
 test('spec: documented examples conform to their schemas', () => {
@@ -130,14 +131,15 @@ const scenario = (name, a, b) => {
 
 const exercised = new Set(); // "METHOD /path status", shared across boots
 
-async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 60_000 }, email = false, authLimit, mailer = createMemoryMailer(), maxOpenGamesPerUser = 0 } = {}) {
+async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 60_000 }, email = false, authLimit, mailer = createMemoryMailer(), maxOpenGamesPerUser = 0, turnEmails = false } = {}) {
   const clock = { t: new Date('2026-11-01T00:00:00Z') };
   const now = () => clock.t;
   const store = stores.makeStore();
   const auth = createTokenAuth({ secret: 'a-test-secret-that-is-long-enough', now });
   const logger = { error() {} };
   const login = email ? createEmailLogin({ store, mailer, auth, appUrl: 'http://localhost:3000', now, logger }) : null;
-  const app = createApp({ store, auth, now, allowSignup, writeLimit, login, authLimit, maxOpenGamesPerUser, logger });
+  const notifications = turnEmails ? createNotifications({ store, mailer, secret: 'a-test-secret-that-is-long-enough', appUrl: 'http://localhost:3000', now, logger }) : null;
+  const app = createApp({ store, auth, now, allowSignup, writeLimit, login, notifications, authLimit, maxOpenGamesPerUser, logger });
   const server = await app.listen(0, '127.0.0.1');
   const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -184,7 +186,7 @@ async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 
     return { id: r.body.user.id, token: r.body.token };
   };
   const close = async () => { server.close(); server.closeAllConnections(); };
-  return { app, store, clock, base, call, signup, close, mailer };
+  return { app, store, clock, base, call, signup, close, mailer, notifications };
 }
 
 const G = '/api/v1/games';
@@ -393,6 +395,59 @@ scenario('conformance: email sign-in responses and requests match the spec', asy
     const r = await broken.call(null, 'POST', '/api/v1/auth/email-link', { body: { email: `b.${tag}@example.org` } });
     assert.equal(r.status, 503);
   } finally { await broken.close(); }
+});
+
+scenario('conformance: turn email settings and the unsubscribe link match the spec', async () => {
+  const tag = `${process.pid}${Date.now().toString(36)}`;
+  const mailer = createMemoryMailer();
+  const ctx = await boot({ email: true, mailer, allowSignup: true, turnEmails: true });
+  const { call } = ctx;
+  try {
+    await call(null, 'POST', '/api/v1/auth/email-link', { body: { email: `nia.${tag}@example.org` } });
+    const secret = /#\/verify\/([A-Za-z0-9_-]{43})/.exec(mailer.sent[0].text)[1];
+    const nia = (await call(null, 'POST', '/api/v1/auth/verify', { body: { token: secret, displayName: 'Nia' } })).body;
+    assert.deepEqual((await call(nia.token, 'GET', '/api/v1/me')).body.notifications, { available: true, canEnable: true, turnEmails: false });
+
+    assert.deepEqual((await call(nia.token, 'PUT', '/api/v1/me/notifications', { body: { turnEmails: true } })).body, { turnEmails: true });
+    assert.equal((await call(nia.token, 'GET', '/api/v1/me')).body.notifications.turnEmails, true);
+    for (const body of [{ turnEmails: 'yes' }, {}, { turnEmails: 1 }]) {
+      const bad = await call(nia.token, 'PUT', '/api/v1/me/notifications', { body });
+      assert.equal(bad.status, 422);
+      assert.equal(bad.body.errors[0].code, 'NOT_BOOLEAN');
+    }
+    assert.equal((await call(null, 'PUT', '/api/v1/me/notifications', { body: { turnEmails: true } })).status, 401);
+
+    const sam = await ctx.signup('Sam');                                         // a name-only account has no address to write to
+    assert.deepEqual((await call(sam.token, 'GET', '/api/v1/me')).body.notifications, { available: true, canEnable: false, turnEmails: false });
+    const refused = await call(sam.token, 'PUT', '/api/v1/me/notifications', { body: { turnEmails: true } });
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.errors[0].code, 'EMAIL_REQUIRED');
+
+    const token = ctx.notifications.tokens.issue(nia.user.id);
+    assert.deepEqual((await call(null, 'POST', '/api/v1/auth/unsubscribe', { body: { token } })).body, { turnEmails: false });
+    assert.equal((await call(nia.token, 'GET', '/api/v1/me')).body.notifications.turnEmails, false);
+    for (const bad of [`${nia.user.id}.${'x'.repeat(43)}`, 'short']) {
+      const r = await call(null, 'POST', '/api/v1/auth/unsubscribe', { body: { token: bad } });
+      assert.equal(r.status, 400);
+      assert.equal(r.body.errors[0].code, 'LINK_INVALID');
+    }
+    assert.equal((await call(null, 'POST', '/api/v1/auth/unsubscribe', { raw: '{\"token\":', })).status, 400);
+    assert.equal((await call(null, 'POST', '/api/v1/auth/unsubscribe', { raw: 'token=x', headers: { 'content-type': 'text/plain' } })).status, 415);
+  } finally { await ctx.close(); }
+
+  const off = await boot();                                                      // a server that sends no email
+  try {
+    const u = await off.signup('Ola');
+    assert.deepEqual((await off.call(u.token, 'GET', '/api/v1/me')).body.notifications, { available: false, canEnable: false, turnEmails: false });
+    assert.equal((await off.call(u.token, 'PUT', '/api/v1/me/notifications', { body: { turnEmails: true } })).status, 404);
+    assert.equal((await off.call(null, 'POST', '/api/v1/auth/unsubscribe', { body: { token: `1.${'x'.repeat(43)}` } })).status, 404);
+  } finally { await off.close(); }
+
+  const limited = await boot({ turnEmails: true, authLimit: { max: 1, windowMs: 60_000 } });
+  try {
+    assert.equal((await limited.call(null, 'POST', '/api/v1/auth/unsubscribe', { body: { token: 'short' } })).status, 400);
+    assert.equal((await limited.call(null, 'POST', '/api/v1/auth/unsubscribe', { body: { token: 'short' } })).status, 429);
+  } finally { await limited.close(); }
 });
 
 scenario('conformance: AI players in the lobby match the spec', async () => {

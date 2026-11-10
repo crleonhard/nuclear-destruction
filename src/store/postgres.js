@@ -1,4 +1,4 @@
-// PostgreSQL implementation of the store contract, matching migrations 001-008.
+// PostgreSQL implementation of the store contract, matching migrations 001-009.
 // Takes any pg-compatible pool (`pool.connect()` -> client with `query`, `release`).
 // Verified against PostgreSQL 16 by the store contract suite and the schema tests (npm run test:db:docker).
 
@@ -240,6 +240,67 @@ class PgTx {
   async deleteLoginLinksExpiredBefore(cutoff) {
     const rows = await this.q('DELETE FROM login_links WHERE expires_at <= $1 RETURNING id', [cutoff]);
     return rows.length;
+  }
+
+  // ── opt-in turn emails (migration 009) ──
+  /** { hasEmail, turnEmailsSince } for one account, or null if there is no such user. */
+  async getNotificationSettings(userId) {
+    const [r] = await this.q('SELECT email IS NOT NULL AS has_email, turn_emails_since FROM users WHERE id = $1', [userId]);
+    return r ? { hasEmail: r.has_email, turnEmailsSince: r.turn_emails_since } : null;
+  }
+
+  /** Turns turn emails on (`since` is a Date; an already-enabled account keeps its original moment) or off (null). */
+  async setTurnEmails(userId, since) {
+    const rows = await this.q(
+      'UPDATE users SET turn_emails_since = CASE WHEN $2::timestamptz IS NULL THEN NULL ELSE COALESCE(turn_emails_since, $2::timestamptz) END WHERE id = $1 RETURNING id',
+      [userId, since]);
+    return rows.length > 0;
+  }
+
+  /**
+   * Everyone who may be owed a mail right now: a living, opted-in person with an email address, in an active game whose
+   * open turn they have not yet submitted for. `sentKinds` lists what was already sent for that turn.
+   */
+  async listTurnNotificationCandidates() {
+    const rows = await this.q(
+      `SELECT u.id AS user_id, u.email, u.display_name, u.turn_emails_since, g.id AS game_id, p.country,
+              t.number, t.type, t.opens_at, t.deadline_at,
+              COALESCE((SELECT array_agg(n.kind) FROM turn_notifications n
+                         WHERE n.user_id = u.id AND n.game_id = g.id AND n.turn_number = t.number), '{}') AS sent_kinds
+         FROM games g
+         JOIN turns t   ON t.game_id = g.id AND t.number = g.turn_number AND t.status = 'OPEN'
+         JOIN players p ON p.game_id = g.id AND p.alive
+         JOIN users u   ON u.id = p.user_id AND u.email IS NOT NULL AND u.turn_emails_since IS NOT NULL AND u.ai_persona IS NULL
+        WHERE g.status = 'ACTIVE'
+          AND NOT EXISTS (SELECT 1 FROM sheets s WHERE s.turn_id = t.id AND s.player_id = p.id AND s.is_final)
+        ORDER BY t.deadline_at, u.id`);
+    return rows.map((r) => ({
+      userId: n(r.user_id), email: r.email, displayName: r.display_name, since: r.turn_emails_since,
+      gameId: n(r.game_id), country: r.country, turnNumber: r.number, turnType: r.type,
+      opensAt: r.opens_at, deadlineAt: r.deadline_at, sentKinds: r.sent_kinds,
+    }));
+  }
+
+  /** Records that a mail is about to be sent. False if that mail was already claimed (so it is never sent twice). */
+  async claimTurnNotification({ userId, gameId, turnNumber, kind, sentAt }) {
+    const rows = await this.q(
+      `INSERT INTO turn_notifications (user_id, game_id, turn_number, kind, sent_at) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT DO NOTHING RETURNING user_id`, [userId, gameId, turnNumber, kind, sentAt]);
+    return rows.length > 0;
+  }
+
+  /** Undoes a claim after the mail server refused the message, so a later pass tries again. */
+  async releaseTurnNotification({ userId, gameId, turnNumber, kind }) {
+    await this.q('DELETE FROM turn_notifications WHERE user_id = $1 AND game_id = $2 AND turn_number = $3 AND kind = $4', [userId, gameId, turnNumber, kind]);
+  }
+
+  async countTurnNotificationsSince(since) {
+    const [r] = await this.q('SELECT count(*)::int AS c FROM turn_notifications WHERE sent_at >= $1', [since]);
+    return r.c;
+  }
+
+  async deleteTurnNotificationsSentBefore(cutoff) {
+    return (await this.q('DELETE FROM turn_notifications WHERE sent_at < $1 RETURNING user_id', [cutoff])).length;
   }
 
   async getUsers(ids) {

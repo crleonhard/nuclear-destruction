@@ -8,7 +8,9 @@ All errors look like `{ "errors": [{ "code", "field", "message" }] }`. Authentic
 |---|---|---|
 | GET | `/healthz` | no auth |
 | POST | `/api/v1/users` | `{displayName}` -> `{user, token}`; only when `allowSignup` is on |
-| GET | `/api/v1/me` | |
+| GET | `/api/v1/me` | `{user, notifications: {available, canEnable, turnEmails}}` |
+| PUT | `/api/v1/me/notifications` | `{turnEmails: boolean}` opt in or out of turn emails; 409 `EMAIL_REQUIRED` for accounts without an address, 422 `NOT_BOOLEAN`, 404 when the server sends no email |
+| POST | `/api/v1/auth/unsubscribe` | `{token}` from the link in a turn email; no sign-in; only switches the emails off; 400 `LINK_INVALID` |
 | GET | `/api/v1/games` | the caller's games |
 | POST | `/api/v1/games` | `{turnDeadlineHours?, forfeitAfterN?}`; creator joins automatically |
 | GET | `/api/v1/games/:id/lobby` | seats and countries; never includes the seed |
@@ -45,6 +47,8 @@ method to show: email links when mail is configured, or (development only) a dis
   `login.js` is the email-link sign-in: `POST /api/v1/auth/email-link` mails a one-time link, `POST /api/v1/auth/verify` exchanges its secret for a
   token. The secret travels after a `#` (never sent to servers or logs) and is posted by the page, so mail scanners that fetch links cannot use them up.
   `allowSignup` is a development convenience.
+- **Turn emails** (`../app/notifications.js`) are opt-in per person and sent by the deadline worker. The HTTP layer only offers the settings call and the
+  one-click stop link, both answered 404 when the server has no mailer. See the README's "Turn emails".
 - **Email sign-in never reveals who has an account:** asking for a link answers 202 for every well-formed address. See the README's "Signing in".
 
 ## Running
@@ -66,6 +70,8 @@ DATABASE_URL=postgres://... AUTH_SECRET=<16+ random chars> APP_URL=https://... S
 | `SMTP_URL` | | `smtps://user:pass@host:465` or `smtp://user:pass@host:587` (STARTTLS required; credentials are never sent unencrypted). Percent-encode special characters in the password |
 | `MAIL_FROM` | | sender, `game@example.com` or `Name <game@example.com>` |
 | `LOGIN_LINK_MINUTES` | 15 | how long an emailed link works (1 to 60) |
+| `NOTIFY_REMINDER_HOURS` | 4 | how long before a deadline the opt-in reminder email goes out, 0 to 72; `0` = no reminders |
+| `NOTIFY_DAILY_LIMIT` | 150 | turn emails in any rolling 24 hours, 0 to 100000; `0` = no cap. Keep it below the mail plan's daily allowance minus sign-in links (Mailjet free: 200 in total) |
 | `TRUST_PROXY` | off | `true` only behind a reverse proxy you control: client addresses for rate limits come from `X-Forwarded-For` |
 | `MAX_OPEN_GAMES_PER_USER` | 3 | unfinished games (lobby or running) one person may have created at once, 0 to 100; `0` = no limit |
 | `CLIENT_IP_HEADER` | | a header the proxy fills with the visitor's address, e.g. `cf-connecting-ip` on Render. Wins over `TRUST_PROXY`; values that are not IP addresses are ignored |

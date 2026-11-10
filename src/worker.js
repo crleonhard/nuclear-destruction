@@ -2,7 +2,7 @@
 import { resolveDueTurns } from './app/pipeline.js';
 import { playPendingAiTurns } from './app/ai.js';
 
-export function startWorker({ store, notify, intervalMs = 60_000, now = () => new Date(), logger = console }) {
+export function startWorker({ store, notify, notifier = null, intervalMs = 60_000, now = () => new Date(), logger = console }) {
   let current = null; // the tick that is running right now, if any
   const run = async () => {
     try {
@@ -26,6 +26,8 @@ export function startWorker({ store, notify, intervalMs = 60_000, now = () => ne
           notify(a.gameId, { type: 'player_submitted', finalCount: a.last.finalCount, activeCount: a.last.activeCount });
         }
       }
+      // Opt-in turn emails go last and never block or break the work above; the notifier catches its own errors.
+      if (notifier) await notifier.tick(now());
       return results;
     } catch (err) {
       logger.error('[worker] tick failed', err);

@@ -236,7 +236,7 @@ paths:
       operationId: "getMe"
       tags:
         - "Account"
-      summary: "The signed-in user"
+      summary: "The signed-in user and their email settings"
       responses:
         "200":
           description: "The caller."
@@ -247,10 +247,106 @@ paths:
                 properties:
                   user:
                     "$ref": "#/components/schemas/User"
+                  notifications:
+                    "$ref": "#/components/schemas/NotificationSettings"
                 required:
                   - "user"
+                  - "notifications"
         "401":
           "$ref": "#/components/responses/Unauthenticated"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/me/notifications":
+    put:
+      operationId: "setTurnEmails"
+      tags:
+        - "Account"
+      summary: "Opt in to or out of turn emails"
+      description: "Turn emails are off until a person turns them on. When on, the person gets one email when a turn opens (only for turns that open after they opted in) and one reminder shortly before the deadline if they have not submitted final orders. Only accounts with an email address can opt in (409 `EMAIL_REQUIRED` otherwise). Answers 404 when the server sends no email. Repeating the same value is harmless."
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: "object"
+              properties:
+                turnEmails:
+                  type: "boolean"
+              required:
+                - "turnEmails"
+      responses:
+        "200":
+          description: "Saved."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  turnEmails:
+                    type: "boolean"
+                required:
+                  - "turnEmails"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthenticated"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/Unprocessable"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+  "/api/v1/auth/unsubscribe":
+    post:
+      operationId: "unsubscribeTurnEmails"
+      tags:
+        - "Account"
+      summary: "Stop turn emails from the link in an email"
+      description: "Send the token from the link at the bottom of a turn email (the part after `#/unsubscribe/`). It needs no sign-in, never expires and can only switch turn emails off. Limited per client address."
+      security: []
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: "object"
+              properties:
+                token:
+                  type: "string"
+                  minLength: 45
+                  maxLength: 60
+              required:
+                - "token"
+      responses:
+        "200":
+          description: "Turn emails are off."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  turnEmails:
+                    const: false
+                required:
+                  - "turnEmails"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
         "500":
           "$ref": "#/components/responses/InternalError"
   "/api/v1/games":
@@ -1040,6 +1136,8 @@ components:
         - "MAIL_UNAVAILABLE"
         - "PERSONA_INVALID"
         - "TOO_MANY_GAMES"
+        - "EMAIL_REQUIRED"
+        - "NOT_BOOLEAN"
     ValidationError:
       type: "object"
       properties:
@@ -1085,6 +1183,22 @@ components:
       required:
         - "id"
         - "displayName"
+    NotificationSettings:
+      type: "object"
+      properties:
+        available:
+          type: "boolean"
+          description: "False when this server sends no email at all, so there is nothing to switch on."
+        canEnable:
+          type: "boolean"
+          description: "False for accounts without an email address (for example name-only development accounts)."
+        turnEmails:
+          type: "boolean"
+          description: "True when the person opted in to turn emails. Off by default."
+      required:
+        - "available"
+        - "canEnable"
+        - "turnEmails"
     SpyTarget:
       type: "object"
       properties:

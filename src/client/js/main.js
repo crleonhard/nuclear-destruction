@@ -5,6 +5,7 @@ import { h, mount } from './dom.js';
 import { startRouter } from './router.js';
 import { loginView } from './views/login.js';
 import { verifyView } from './views/verify.js';
+import { unsubscribeView } from './views/unsubscribe.js';
 import { homeView } from './views/home.js';
 import { gameView } from './views/game-page.js';
 import { historyView } from './views/history.js';
@@ -49,6 +50,8 @@ router = startRouter({
     { pattern: '/login', view: loginView },
     { pattern: '/verify/:token', view: verifyView },
     { pattern: '/verify', view: verifyView },
+    { pattern: '/unsubscribe/:token', view: unsubscribeView },
+    { pattern: '/unsubscribe', view: unsubscribeView },
     { pattern: '/', view: homeView },
     { pattern: '/games/:id', view: gameView },
     { pattern: '/games/:id/history', view: historyView },
@@ -57,6 +60,7 @@ router = startRouter({
   notFound: async (ctx) => { mount(ctx.outlet, h('section', { class: 'card narrow' }, h('h1', {}, 'Page not found'), h('a', { href: '#/' }, 'Back to your games'))); return {}; },
   guard: (path) => {
     if (path === '/verify' || path.startsWith('/verify/')) return null;   // opened from an email: works signed in or out
+    if (path === '/unsubscribe' || path.startsWith('/unsubscribe/')) return null;
     if (!tokens.get() && path !== '/login') return '/login';
     if (tokens.get() && path === '/login') return '/';
     return null;

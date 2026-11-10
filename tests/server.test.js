@@ -191,3 +191,51 @@ test('startup: with a mailer, the whole sign-in works; with no sign-in method at
     assert.equal((await fetch(`http://127.0.0.1:${none.port}/api/v1/auth/config`).then((r) => r.json())).emailLogin, false);
   } finally { await on.stop(); await none.stop(); }
 });
+
+test('config: NOTIFY_REMINDER_HOURS (default 4, 0 to 72) and NOTIFY_DAILY_LIMIT (default 150, 0 to 100000) are checked', () => {
+  const c = readConfig(MAIL_BASE);
+  assert.deepEqual([c.notifyReminderHours, c.notifyDailyLimit], [4, 150]);
+  const d = readConfig({ ...MAIL_BASE, NOTIFY_REMINDER_HOURS: '0', NOTIFY_DAILY_LIMIT: '0' });
+  assert.deepEqual([d.notifyReminderHours, d.notifyDailyLimit], [0, 0]);
+  const e = readConfig({ ...MAIL_BASE, NOTIFY_REMINDER_HOURS: '72', NOTIFY_DAILY_LIMIT: '100000' });
+  assert.deepEqual([e.notifyReminderHours, e.notifyDailyLimit], [72, 100000]);
+  for (const bad of ['-1', '73', '1.5', 'soon']) assert.equal(problems({ ...MAIL_BASE, NOTIFY_REMINDER_HOURS: bad }).length, 1, bad);
+  for (const bad of ['-1', '100001', '2.5', 'many']) assert.equal(problems({ ...MAIL_BASE, NOTIFY_DAILY_LIMIT: bad }).length, 1, bad);
+});
+
+test('startup: turn emails are opt-in end to end: off by default, one mail when a turn opens, one click stops them; no mail setup, no feature', async () => {
+  const sent = [];
+  const on = await startServer({ env: env({ MAIL_TRANSPORT: 'console', APP_URL: 'http://localhost:3000', WORKER_INTERVAL_MS: '3600000' }), mailer: { async send(m) { sent.push(m); } }, logger: quiet() });
+  const none = await startServer({ env: env({ ALLOW_SIGNUP: 'true' }), logger: quiet() });
+  try {
+    const base = `http://127.0.0.1:${on.port}`;
+    const call = async (method, path, body, token) => json(await fetch(base + path, {
+      method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined,
+    }));
+    await call('POST', '/api/v1/auth/email-link', { email: 'ada@example.org' });
+    const secret = /#\/verify\/([A-Za-z0-9_-]{43})/.exec(sent[0].text)[1];
+    const { token } = (await call('POST', '/api/v1/auth/verify', { token: secret, displayName: 'Ada' })).body;
+    assert.deepEqual((await call('GET', '/api/v1/me', null, token)).body.notifications, { available: true, canEnable: true, turnEmails: false });
+
+    const { gameId } = (await call('POST', '/api/v1/games', { aiPlayers: 2 }, token)).body;
+    await on.worker.tick();
+    assert.equal(sent.length, 1, 'only the sign-in link so far: nothing is sent to someone who has not opted in');
+    assert.equal((await call('PUT', '/api/v1/me/notifications', { turnEmails: true }, token)).status, 200);
+    assert.equal((await call('POST', `/api/v1/games/${gameId}/start`, {}, token)).status, 200);
+    await on.worker.tick();
+    await on.worker.tick();
+    assert.equal(sent.length, 2, 'one turn mail, however many passes');
+    assert.equal(sent[1].to, 'ada@example.org');
+    assert.match(sent[1].subject, new RegExp(`game #${gameId}, turn 1 is open`));
+    const stop = /#\/unsubscribe\/(\d+\.[A-Za-z0-9_-]{43})/.exec(sent[1].text);
+    assert.ok(stop && sent[1].text.includes(`http://localhost:3000/#/unsubscribe/${stop[1]}`));
+
+    assert.equal((await call('POST', '/api/v1/auth/unsubscribe', { token: stop[1] })).status, 200);
+    assert.equal((await call('GET', '/api/v1/me', null, token)).body.notifications.turnEmails, false);
+
+    const off = `http://127.0.0.1:${none.port}`;
+    const u = (await fetch(`${off}/api/v1/users`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ displayName: 'Sam' }) }).then((r) => r.json()));
+    const me = await fetch(`${off}/api/v1/me`, { headers: { authorization: `Bearer ${u.token}` } }).then((r) => r.json());
+    assert.equal(me.notifications.available, false);
+  } finally { await on.stop(); await none.stop(); }
+});

@@ -1,5 +1,6 @@
 import { h, mount } from '../dom.js';
 import { plural } from '../format.js';
+import { loadEmailSettings } from './email-settings.js';
 
 /** Pulls a game number out of "12", "#/games/12" or a full invite link. */
 export function parseGameRef(text) {
@@ -53,13 +54,15 @@ export async function homeView({ api, session, outlet, navigate, flash }) {
     },
   }, h('div', { class: 'rowform' }, h('label', { class: 'field', for: 'ref' }, h('span', {}, 'Join a game'), ref), h('button', { type: 'submit' }, 'Go')));
 
+  const emailHolder = h('div', {});
   mount(outlet,
     h('h1', {}, `Welcome, ${session.user?.displayName ?? 'player'}`),
     h('section', { class: 'card' }, h('h2', {}, 'Your games'), list),
     h('div', { class: 'cols' },
       h('section', { class: 'card' }, h('h2', {}, 'Create a game'), create,
         h('p', { class: 'hint' }, `You will be the creator: you choose when to start, once ${plural(3, 'player')} to 9 have joined. AI players count as players, and you can add or remove them in the lobby.`)),
-      h('section', { class: 'card' }, h('h2', {}, 'Join a game'), join)));
-  await loadGames();
+      h('section', { class: 'card' }, h('h2', {}, 'Join a game'), join)),
+    emailHolder);
+  await Promise.all([loadGames(), loadEmailSettings({ api, holder: emailHolder, flash })]);
   return {};
 }

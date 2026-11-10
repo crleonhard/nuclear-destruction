@@ -86,6 +86,7 @@ export function createApp({
   now = () => new Date(),
   allowSignup = false,        // POST /users mints accounts; keep off in production unless you want open sign-up
   login = null,               // email-link sign-in: { requestLink({ email }), verifyLink({ token, displayName }) } (see login.js)
+  notifications = null,       // opt-in turn emails: { preferences(userId), setTurnEmails(userId, enabled), unsubscribe(token) } (see ../app/notifications.js)
   authLimit = { max: 20, windowMs: 15 * 60_000 },   // per client address, for each of the two sign-in endpoints
   trustProxy = false,         // true only behind a reverse proxy you control: the client address is then read from X-Forwarded-For
   maxOpenGamesPerUser = 3,    // unfinished games one person may have created at once (0 = no limit)
@@ -182,8 +183,21 @@ export function createApp({
 
   route('GET', '/api/v1/me', async ({ userId }) => {
     const names = await store.withTransaction((tx) => tx.getUsers([userId]));
-    return { user: { id: userId, displayName: names[userId] ?? null } };
+    const prefs = notifications ? await notifications.preferences(userId) : { available: false, canEnable: false, turnEmails: false };
+    return { user: { id: userId, displayName: names[userId] ?? null }, notifications: prefs };
   });
+
+  route('PUT', '/api/v1/me/notifications', async ({ userId, body }) => {
+    if (!notifications) throw err(404, 'NOT_FOUND', 'Not found');
+    return notifications.setTurnEmails(userId, body.turnEmails);
+  });
+
+  // The link at the bottom of every turn email. No sign-in: the token itself says who it is for, and it can only switch the emails off.
+  route('POST', '/api/v1/auth/unsubscribe', async ({ req, body }) => {
+    if (!notifications) throw err(404, 'NOT_FOUND', 'Not found');
+    if (authLimited('unsubscribe', req)) throw err(429, 'RATE_LIMITED', 'Too many requests; try again later');
+    return notifications.unsubscribe(body.token);
+  }, { auth: false });
 
   route('GET', '/api/v1/games', async ({ userId }) => myGames(store, { userId }));
 

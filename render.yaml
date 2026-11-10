@@ -29,3 +29,8 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
+      # Optional: opt-in turn emails use the same mail settings. Defaults shown; remove the comment marks to change them.
+      # - key: NOTIFY_REMINDER_HOURS
+      #   value: "4"
+      # - key: NOTIFY_DAILY_LIMIT
+      #   value: "150"                      # Mailjet free allows 200 a day in total, sign-in links included

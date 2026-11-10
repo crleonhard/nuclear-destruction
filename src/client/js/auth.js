@@ -49,3 +49,19 @@ export async function completeEmailLink(api, tokens, secret, displayName = '') {
 }
 
 export const errorCode = (err) => err?.errors?.[0]?.code ?? null;
+
+// ── turn emails (opt-in) ──
+
+/** What the "stop these emails" link carries after \"#/unsubscribe/\": a user number, a dot and 43 URL-safe characters. */
+export const looksLikeUnsubscribeToken = (s) => typeof s === 'string' && /^[1-9][0-9]{0,15}\.[A-Za-z0-9_-]{43}$/.test(s);
+
+/** Switches the caller's turn emails on or off. Resolves to the saved value. */
+export async function setTurnEmails(api, enabled) {
+  const { turnEmails } = await api.put('/api/v1/me/notifications', { turnEmails: enabled });
+  return turnEmails;
+}
+
+/** The one-click link from an email. Needs no sign-in. */
+export async function unsubscribeTurnEmails(api, token) {
+  await api.post('/api/v1/auth/unsubscribe', { token });
+}

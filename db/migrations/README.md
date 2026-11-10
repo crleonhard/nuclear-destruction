@@ -14,6 +14,7 @@ markers split into separate `.up.sql` / `.down.sql` files).
 | 006 | Privacy views: public players/minors, inbox, news, replay |
 | 007 | `users.email` (unique, lower-case) and `login_links` (hashed, single-use, expiring email sign-in links) |
 | 008 | `users.ai_persona`: server-controlled AI players (a persona and no email) |
+| 009 | `users.turn_emails_since` (opt-in turn emails; NULL = off) and `turn_notifications` (one row per mail sent, which makes each mail go out at most once) |
 
 ## Mapping to the resolver
 

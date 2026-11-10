@@ -5,7 +5,7 @@
 
 const emptyData = () => ({
   nextId: 1,
-  users: [], loginLinks: [],
+  users: [], loginLinks: [], turnNotifications: [],
   games: [], players: [], minors: [], minorIndex: [], spySlots: [], turns: [], sheets: [],
   messages: [], news: [], reports: [], battleResults: [], events: [],
 });
@@ -180,6 +180,70 @@ class MemTx {
     const before = this.d.loginLinks.length;
     this.d.loginLinks = this.d.loginLinks.filter((l) => l.expiresAt > cutoff);
     return before - this.d.loginLinks.length;
+  }
+
+  // ── opt-in turn emails (mirrors migration 009) ──
+  /** { hasEmail, turnEmailsSince } for one account, or null if there is no such user. */
+  async getNotificationSettings(userId) {
+    const u = this.d.users.find((x) => x.id === userId);
+    return u ? { hasEmail: !!u.email, turnEmailsSince: u.turnEmailsSince ?? null } : null;
+  }
+
+  /** Turns turn emails on (`since` is a Date; an already-enabled account keeps its original moment) or off (null). */
+  async setTurnEmails(userId, since) {
+    const u = this.d.users.find((x) => x.id === userId);
+    if (!u) return false;
+    if (since && !u.email) throw new Error('only accounts with an email address can receive turn emails');
+    u.turnEmailsSince = since ? (u.turnEmailsSince ?? since) : null;
+    return true;
+  }
+
+  /**
+   * Everyone who may be owed a mail right now: a living, opted-in person with an email address, in an active game whose
+   * open turn they have not yet submitted for. `sentKinds` lists what was already sent for that turn.
+   */
+  async listTurnNotificationCandidates() {
+    const d = this.d;
+    const out = [];
+    for (const g of d.games) {
+      if (g.status !== 'ACTIVE') continue;
+      const turn = d.turns.find((t) => t.gameId === g.id && t.number === g.turnNumber && t.status === 'OPEN');
+      if (!turn) continue;
+      for (const p of d.players.filter((x) => x.gameId === g.id && x.alive)) {
+        const u = d.users.find((x) => x.id === p.userId);
+        if (!u || !u.email || !u.turnEmailsSince || u.aiPersona) continue;
+        if (d.sheets.some((s) => s.turnId === turn.id && s.playerId === p.id && s.isFinal)) continue;
+        out.push({
+          userId: u.id, email: u.email, displayName: u.displayName, since: u.turnEmailsSince,
+          gameId: g.id, country: p.country, turnNumber: turn.number, turnType: turn.type,
+          opensAt: turn.opensAt, deadlineAt: turn.deadlineAt,
+          sentKinds: d.turnNotifications.filter((n) => n.userId === u.id && n.gameId === g.id && n.turnNumber === turn.number).map((n) => n.kind),
+        });
+      }
+    }
+    return clone(out);
+  }
+
+  /** Records that a mail is about to be sent. False if that mail was already claimed (so it is never sent twice). */
+  async claimTurnNotification({ userId, gameId, turnNumber, kind, sentAt }) {
+    if (this.d.turnNotifications.some((n) => n.userId === userId && n.gameId === gameId && n.turnNumber === turnNumber && n.kind === kind)) return false;
+    this.d.turnNotifications.push({ userId, gameId, turnNumber, kind, sentAt });
+    return true;
+  }
+
+  /** Undoes a claim after the mail server refused the message, so a later pass tries again. */
+  async releaseTurnNotification({ userId, gameId, turnNumber, kind }) {
+    this.d.turnNotifications = this.d.turnNotifications.filter((n) => !(n.userId === userId && n.gameId === gameId && n.turnNumber === turnNumber && n.kind === kind));
+  }
+
+  async countTurnNotificationsSince(since) {
+    return this.d.turnNotifications.filter((n) => n.sentAt >= since).length;
+  }
+
+  async deleteTurnNotificationsSentBefore(cutoff) {
+    const before = this.d.turnNotifications.length;
+    this.d.turnNotifications = this.d.turnNotifications.filter((n) => n.sentAt >= cutoff);
+    return before - this.d.turnNotifications.length;
   }
 
   async getUsers(ids) {

@@ -57,7 +57,7 @@ pgtest('every table, view, function, trigger and enum from the migrations exists
   const names = async (sql) => (await q(sql)).map((r) => r.n).sort();
   const tables = await names(`SELECT table_name AS n FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`);
   assert.deepEqual(tables, ['battle_results', 'events', 'games', 'login_links', 'messages', 'minor_index', 'minors', 'players', 'reports',
-    'schema_migrations', 'sheets', 'spy_slots', 'turns', 'users', 'world_news'].sort());
+    'schema_migrations', 'sheets', 'spy_slots', 'turn_notifications', 'turns', 'users', 'world_news'].sort());
   const views = await names(`SELECT table_name AS n FROM information_schema.views WHERE table_schema = 'public'`);
   assert.deepEqual(views, ['inbox_messages', 'public_minors', 'public_news', 'public_players', 'replay_events', 'replay_sheets']);
   const fns = await names(`SELECT p.proname AS n FROM pg_proc p JOIN pg_namespace s ON s.oid = p.pronamespace WHERE s.nspname = 'public'`);
