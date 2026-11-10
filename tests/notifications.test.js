@@ -337,8 +337,11 @@ scenario('store: a claim succeeds once per person, game, turn and kind; release 
   await w.tx((t) => t.releaseTurnNotification(key));
   assert.equal(await w.tx((t) => t.countTurnNotificationsSince(w.at(0))), 2);
   assert.equal(await claim(), true, 'a released claim can be taken again');
-  assert.equal(await w.tx((t) => t.deleteTurnNotificationsSentBefore(w.at(1))), 1, 'only the older one is swept');
-  assert.equal(await w.tx((t) => t.countTurnNotificationsSince(w.at(-1))), 2);
+  // The sweep is global, so on a shared database it may also remove rows left by earlier scenarios: check what it did to ours.
+  assert.ok(await w.tx((t) => t.deleteTurnNotificationsSentBefore(w.at(1))) >= 1, 'the older one is swept');
+  assert.equal(await claim({ kind: 'DEADLINE_SOON' }, w.at(1)), false, 'a row sent at the cutoff stays');
+  assert.equal(await claim({ turnNumber: 2 }, w.at(2)), false, 'a newer row stays');
+  assert.equal(await claim(), true, 'the swept row is gone, so it can be claimed again');
 });
 
 scenario('store: the candidate list holds only living, opted-in people in an open turn, with what was already sent', async () => {
