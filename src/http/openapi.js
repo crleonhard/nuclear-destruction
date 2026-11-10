@@ -61,6 +61,8 @@ export const ERROR_CODES = [
   'TOO_MANY_GAMES',
   // turn emails
   'EMAIL_REQUIRED', 'NOT_BOOLEAN',
+  // account basics
+  'CONFIRMATION_REQUIRED',
 ];
 
 const schemas = {
@@ -331,7 +333,39 @@ const paths = {
     }),
   },
   '/api/v1/me': {
-    get: operation({ id: 'getMe', tag: 'Account', summary: 'The signed-in user and their email settings', responses: { ...ok('The caller.', obj({ user: ref('User'), notifications: ref('NotificationSettings') })), ...errs(...READ) } }),
+    get: operation({
+      id: 'getMe', tag: 'Account', summary: 'The signed-in user, their email address and their email settings',
+      responses: { ...ok('The caller. `email` is the address they signed in with, or null for name-only development accounts.', obj({ user: ref('User'), email: nullable(str()), notifications: ref('NotificationSettings') })), ...errs(...READ) },
+    }),
+    put: operation({
+      id: 'renameMe', tag: 'Account', summary: 'Change the name other players see',
+      description: 'Takes effect everywhere at once, in games already running too. Names are 1 to 60 characters with no line breaks and need not be unique. AI players and deleted accounts cannot be renamed.',
+      requestBody: { required: true, content: jsonBody(obj({ displayName: str({ minLength: 1, maxLength: 60 }) })) },
+      responses: { ...ok('Saved.', obj({ user: ref('User') })), ...errs(...WRITE, 404, 422) },
+    }),
+  },
+  '/api/v1/me/delete': {
+    post: operation({
+      id: 'deleteAccount', tag: 'Account', summary: 'Delete the signed-in account',
+      description: [
+        'Cannot be undone. Erases the email address, the turn-email setting, pending sign-in links and sent-mail records, renames the account and stops every token at once.',
+        'Games: a lobby the person created is cancelled; a lobby they only joined is left; a running game gets an AI player in their seat (named "Former player");',
+        'finished games keep their record under the name "Deleted player". Orders and messages already sent stay part of the games they were sent in.',
+        'It is a POST with a typed confirmation (`"confirm": "DELETE"`) rather than a DELETE, because DELETE requests carry no body in this API.',
+      ].join(' '),
+      requestBody: { required: true, content: jsonBody(obj({ confirm: { type: 'string', enum: ['DELETE'] } })) },
+      responses: {
+        ...ok('Deleted. The token no longer works.', obj({ deleted: { const: true }, lobbiesCancelled: int({ minimum: 0 }), lobbiesLeft: int({ minimum: 0 }), gamesHandedToAi: int({ minimum: 0 }) })),
+        ...errs(...WRITE, 404, 422),
+      },
+    }),
+  },
+  '/api/v1/auth/sign-out-everywhere': {
+    post: operation({
+      id: 'signOutEverywhere', tag: 'Account', summary: 'Sign out on every device',
+      description: 'Cancels every login token issued so far, this one included, and open event streams are closed. The answer carries a fresh token so the device that asked stays signed in; every other device gets a 401 on its next request.',
+      responses: { ...ok('Done.', obj({ token: str() })), ...errs(...WRITE, 404) },
+    }),
   },
   '/api/v1/me/notifications': {
     put: operation({

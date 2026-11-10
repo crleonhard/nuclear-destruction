@@ -19,6 +19,8 @@ import {
 import {
   createGame, joinGame, pickCountry, leaveGame, setStartPopulation, getLobby, myGames, addAiPlayer, removeAiPlayer, cancelGame,
 } from '../app/lobby.js';
+import { renameAccount, signOutEverywhere, deleteAccount } from '../app/account.js';
+import { playAiTurns } from '../app/ai.js';
 import { openapi } from './openapi.js';
 
 export class HttpError extends Error {
@@ -101,6 +103,9 @@ export function createApp({
   const hub = new EventEmitter();
   hub.setMaxListeners(0);
   const notify = (gameId, event) => hub.emit(`game:${gameId}`, event);
+  // Open event streams by person, so signing out everywhere (or deleting the account) can hang up on every one of them.
+  const streamsOf = new Map();
+  const closeStreamsOf = (userId) => { for (const stop of [...(streamsOf.get(userId) ?? [])]) stop(); };
 
   const routes = [];
   const route = (method, path, handler, { auth: needsAuth = true } = {}) => {
@@ -160,7 +165,7 @@ export function createApp({
     if (!allowSignup || !auth.issue) throw err(404, 'NOT_FOUND', 'Not found');
     const displayName = str(body.displayName, 'displayName', 60);
     const user = await store.withTransaction((tx) => tx.createUser(displayName));
-    return { status: 201, body: { user, token: auth.issue(user.id) } };
+    return { status: 201, body: { user, token: auth.issueFor ? await auth.issueFor(user.id) : auth.issue(user.id) } };
   }, { auth: false });
 
   route('GET', '/api/v1/auth/config', async () => ({
@@ -182,9 +187,32 @@ export function createApp({
   }, { auth: false });
 
   route('GET', '/api/v1/me', async ({ userId }) => {
-    const names = await store.withTransaction((tx) => tx.getUsers([userId]));
+    const account = await store.withTransaction((tx) => tx.getAccount(userId));
     const prefs = notifications ? await notifications.preferences(userId) : { available: false, canEnable: false, turnEmails: false };
-    return { user: { id: userId, displayName: names[userId] ?? null }, notifications: prefs };
+    return { user: { id: userId, displayName: account?.displayName ?? null }, email: account?.email ?? null, notifications: prefs };
+  });
+
+  route('PUT', '/api/v1/me', async ({ userId, body }) => renameAccount(store, { userId, displayName: body.displayName }));
+
+  // Cancels every token issued so far (this device's too) and returns a fresh one so this device stays signed in.
+  route('POST', '/api/v1/auth/sign-out-everywhere', async ({ userId }) => {
+    if (!auth.issue) throw err(404, 'NOT_FOUND', 'Not found');
+    const r = await signOutEverywhere(store, { userId });
+    if (!r.ok) return r;
+    closeStreamsOf(userId);
+    return { token: auth.issue(userId, r.sessionVersion) };
+  });
+
+  // Deleting an account is a POST with a typed confirmation, not a bare DELETE: it cannot be undone, and DELETE requests carry no body here.
+  route('POST', '/api/v1/me/delete', async ({ userId, body }) => {
+    const r = await deleteAccount(store, { userId, confirm: body.confirm, now: now() });
+    if (!r.ok) return r;
+    closeStreamsOf(userId);
+    for (const id of r.affected.cancelled) notify(id, { type: 'game_cancelled' });
+    for (const id of [...r.affected.left, ...r.affected.handed]) notify(id, { type: 'lobby_changed' });
+    // The seats that now belong to an AI player may be waiting for its move; the worker would get to it within a minute, but there is no need to wait.
+    for (const id of r.affected.handed) await playAiTurns(store, id, now()).catch(() => {});
+    return { deleted: true, lobbiesCancelled: r.affected.cancelled.length, lobbiesLeft: r.affected.left.length, gamesHandedToAi: r.affected.handed.length };
   });
 
   route('PUT', '/api/v1/me/notifications', async ({ userId, body }) => {
@@ -320,7 +348,15 @@ export function createApp({
     hub.on(`game:${id}`, listener);
     const beat = setInterval(() => res.write(': keep-alive\n\n'), heartbeatMs);
     beat.unref?.();
-    req.on('close', () => { clearInterval(beat); hub.off(`game:${id}`, listener); });
+    const stop = () => {
+      clearInterval(beat);
+      hub.off(`game:${id}`, listener);
+      streamsOf.get(userId)?.delete(stop);
+      if (!res.writableEnded) res.end();
+    };
+    if (!streamsOf.has(userId)) streamsOf.set(userId, new Set());
+    streamsOf.get(userId).add(stop);
+    req.on('close', stop);
     return { streaming: true };
   });
 

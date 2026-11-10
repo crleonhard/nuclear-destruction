@@ -1,4 +1,4 @@
-// PostgreSQL implementation of the store contract, matching migrations 001-009.
+// PostgreSQL implementation of the store contract, matching migrations 001-010.
 // Takes any pg-compatible pool (`pool.connect()` -> client with `query`, `release`).
 // Verified against PostgreSQL 16 by the store contract suite and the schema tests (npm run test:db:docker).
 
@@ -242,6 +242,46 @@ class PgTx {
     return rows.length;
   }
 
+  // ── account basics (migration 010) ──
+  /** The caller's own account details, or null if there is no such (undeleted) user. */
+  async getAccount(userId) {
+    const [r] = await this.q('SELECT id, display_name, email, ai_persona FROM users WHERE id = $1 AND deleted_at IS NULL', [userId]);
+    return r ? { id: n(r.id), displayName: r.display_name, email: r.email, aiPersona: r.ai_persona } : null;
+  }
+
+  /** Changes a person's display name. False for AI players, deleted accounts and unknown ids. */
+  async renameUser(userId, displayName) {
+    const rows = await this.q('UPDATE users SET display_name = $2 WHERE id = $1 AND deleted_at IS NULL AND ai_persona IS NULL RETURNING id', [userId, displayName]);
+    return rows.length > 0;
+  }
+
+  /** Locks the account row for the rest of the transaction. False if the account is gone or deleted. */
+  async lockUser(userId) {
+    const rows = await this.q('SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE', [userId]);
+    return rows.length > 0;
+  }
+
+  /** Cancels every login token issued so far for this account. Returns the new session version, or null for an unknown or deleted account. */
+  async bumpSessionVersion(userId) {
+    const rows = await this.q('UPDATE users SET session_version = session_version + 1 WHERE id = $1 AND deleted_at IS NULL RETURNING session_version', [userId]);
+    return rows.length ? rows[0].session_version : null;
+  }
+
+  /**
+   * Erases everything that identifies the person but keeps the row (games refer to it): email, turn-email setting, pending
+   * sign-in links for that address and sent-mail records go; the name becomes `displayName`; tokens stop working.
+   * `aiPersona` hands the account to the server's AI (used when it still holds seats in running games).
+   */
+  async anonymizeUser(userId, { displayName, aiPersona = null, at }) {
+    await this.q('DELETE FROM login_links WHERE email = (SELECT email FROM users WHERE id = $1 AND deleted_at IS NULL)', [userId]);
+    await this.q('DELETE FROM turn_notifications WHERE user_id = $1', [userId]);
+    const rows = await this.q(
+      `UPDATE users SET email = NULL, turn_emails_since = NULL, display_name = $2, ai_persona = COALESCE($3, ai_persona),
+              deleted_at = $4, session_version = session_version + 1
+        WHERE id = $1 AND deleted_at IS NULL RETURNING id`, [userId, displayName, aiPersona, at]);
+    return rows.length > 0;
+  }
+
   // ── opt-in turn emails (migration 009) ──
   /** { hasEmail, turnEmailsSince } for one account, or null if there is no such user. */
   async getNotificationSettings(userId) {
@@ -420,6 +460,11 @@ class PgTx {
 
 export function createPgStore(pool) {
   return {
+    /** The session version a token must carry, or null for an unknown or deleted account. One plain query, no transaction: it runs on every request. */
+    async getSessionVersion(userId) {
+      const { rows } = await pool.query('SELECT session_version FROM users WHERE id = $1 AND deleted_at IS NULL', [userId]);
+      return rows.length ? rows[0].session_version : null;
+    },
     async withTransaction(fn) {
       const client = await pool.connect();
       try {

@@ -11,6 +11,8 @@
 | `getPackage(store, {gameId, userId})` | The caller's start-of-turn view; other players' private data is never included. `packageFor(tx, snap, me)` builds it inside a transaction; AI players get exactly the same |
 | `playAiTurns(store, gameId, now)` (`ai.js`) | Submits a final sheet for every living AI player that has not moved this turn. Runs after a game starts and after each resolution; the worker repeats it for any game still waiting |
 
+Account basics live in `account.js`: `renameAccount`, `signOutEverywhere` and `deleteAccount` (which cancels, leaves or hands over each of the person's games and anonymizes the account in one transaction). `lobby.js` exports `removeLobby`, shared by "Cancel game" and account deletion.
+
 Turn emails live in `notifications.js`: `createNotifications({store, mailer, secret, appUrl, ...})` returns `preferences`, `setTurnEmails`, `unsubscribe` and
 `tick`. `planNotifications` (pure) decides what is due from `store.listTurnNotificationCandidates()`; `tick` claims each mail in `turn_notifications`
 before sending it (at most once per person, game, turn and kind), honours the daily and per-pass caps, and never throws. The worker calls `tick` at the end of every pass.

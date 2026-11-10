@@ -6,6 +6,8 @@ import { startRouter } from './router.js';
 import { loginView } from './views/login.js';
 import { verifyView } from './views/verify.js';
 import { unsubscribeView } from './views/unsubscribe.js';
+import { accountView } from './views/account.js';
+import { privacyView } from './views/privacy.js';
 import { homeView } from './views/home.js';
 import { gameView } from './views/game-page.js';
 import { historyView } from './views/history.js';
@@ -30,7 +32,7 @@ function renderHeader() {
   mount(headerEl,
     h('a', { class: 'brand', href: '#/' }, 'NUCLEAR DESTRUCTION'),
     session.user
-      ? h('div', { class: 'who' }, h('span', {}, session.user.displayName),
+      ? h('div', { class: 'who' }, h('a', { href: '#/account', title: 'Your account' }, session.user.displayName),
         h('button', { onClick: () => { signOut(tokens); session.user = null; renderHeader(); router.navigate('/login'); } }, 'Sign out'))
       : null);
 }
@@ -52,6 +54,8 @@ router = startRouter({
     { pattern: '/verify', view: verifyView },
     { pattern: '/unsubscribe/:token', view: unsubscribeView },
     { pattern: '/unsubscribe', view: unsubscribeView },
+    { pattern: '/account', view: accountView },
+    { pattern: '/privacy', view: privacyView },
     { pattern: '/', view: homeView },
     { pattern: '/games/:id', view: gameView },
     { pattern: '/games/:id/history', view: historyView },
@@ -61,6 +65,7 @@ router = startRouter({
   guard: (path) => {
     if (path === '/verify' || path.startsWith('/verify/')) return null;   // opened from an email: works signed in or out
     if (path === '/unsubscribe' || path.startsWith('/unsubscribe/')) return null;
+    if (path === '/privacy') return null;                                  // readable before signing in
     if (!tokens.get() && path !== '/login') return '/login';
     if (tokens.get() && path === '/login') return '/';
     return null;

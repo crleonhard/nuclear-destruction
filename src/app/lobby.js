@@ -26,8 +26,10 @@ export async function createGame(store, { userId, settings = {}, maxOpenGames = 
   // The seed drives country assignment and auction tie-breaks, so it is secret until the game ends.
   const seed = crypto.randomInt(0, 2 ** 32);
   return store.withTransaction(async (tx) => {
-    // A person may have only so many unfinished games they created at once (0 = no limit). The count and the insert
-    // are in one transaction, and the store serializes per person, so simultaneous requests cannot exceed it.
+    // Locking the person first serializes everything that creates games for them: simultaneous requests cannot exceed
+    // the limit below, and an account deleted a moment ago cannot start a game (deleting an account takes the same lock).
+    if (!(await tx.lockUser(userId))) return fail(404, 'NOT_FOUND', 'No such account');
+    // A person may have only so many unfinished games they created at once (0 = no limit).
     if (maxOpenGames > 0) {
       const open = await tx.countOpenGamesCreatedBy(userId);
       if (open >= maxOpenGames) {
@@ -48,12 +50,18 @@ export async function cancelGame(store, { gameId, userId }) {
     if (!game) return fail(404, 'NOT_FOUND', 'No such game');
     if (game.creatorId !== userId) return fail(403, 'FORBIDDEN', 'Only the creator can cancel a game');
     if (game.status !== 'LOBBY') return fail(409, 'ALREADY_STARTED', 'A game that has started cannot be cancelled');
-    const { players } = await tx.loadSnapshot(gameId);
-    const ai = await tx.getAiPersonas(players.map((p) => p.userId));
-    if (!(await tx.deleteLobbyGame(gameId))) return fail(409, 'ALREADY_STARTED', 'A game that has started cannot be cancelled');
-    for (const aiUserId of Object.keys(ai)) await tx.deleteAiUser(Number(aiUserId));   // their seats are gone, so the accounts can go
+    if (!(await removeLobby(tx, gameId))) return fail(409, 'ALREADY_STARTED', 'A game that has started cannot be cancelled');
     return { ok: true };
   });
+}
+
+/** Removes a lobby game with its seats and AI accounts. The caller holds the game lock. False if the game had already started. */
+export async function removeLobby(tx, gameId) {
+  const { players } = await tx.loadSnapshot(gameId);
+  const ai = await tx.getAiPersonas(players.map((p) => p.userId));
+  if (!(await tx.deleteLobbyGame(gameId))) return false;
+  for (const aiUserId of Object.keys(ai)) await tx.deleteAiUser(Number(aiUserId));   // their seats are gone, so the accounts can go
+  return true;
 }
 
 // ───────────────────────── AI players ─────────────────────────

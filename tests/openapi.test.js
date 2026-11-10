@@ -52,7 +52,7 @@ test('spec: operations are complete and consistent', () => {
     }
     if (op.requestBody) assert.ok(op.requestBody.content['application/json'], `${label}: request body`);
   }
-  assert.equal(ids.size, 29);
+  assert.equal(ids.size, 32);
 });
 
 test('spec: documented examples conform to their schemas', () => {
@@ -135,7 +135,7 @@ async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 
   const clock = { t: new Date('2026-11-01T00:00:00Z') };
   const now = () => clock.t;
   const store = stores.makeStore();
-  const auth = createTokenAuth({ secret: 'a-test-secret-that-is-long-enough', now });
+  const auth = createTokenAuth({ secret: 'a-test-secret-that-is-long-enough', now, store });
   const logger = { error() {} };
   const login = email ? createEmailLogin({ store, mailer, auth, appUrl: 'http://localhost:3000', now, logger }) : null;
   const notifications = turnEmails ? createNotifications({ store, mailer, secret: 'a-test-secret-that-is-long-enough', appUrl: 'http://localhost:3000', now, logger }) : null;
@@ -186,7 +186,7 @@ async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 
     return { id: r.body.user.id, token: r.body.token };
   };
   const close = async () => { server.close(); server.closeAllConnections(); };
-  return { app, store, clock, base, call, signup, close, mailer, notifications };
+  return { app, store, clock, base, call, signup, close, mailer, notifications, auth };
 }
 
 const G = '/api/v1/games';
@@ -448,6 +448,62 @@ scenario('conformance: turn email settings and the unsubscribe link match the sp
     assert.equal((await limited.call(null, 'POST', '/api/v1/auth/unsubscribe', { body: { token: 'short' } })).status, 400);
     assert.equal((await limited.call(null, 'POST', '/api/v1/auth/unsubscribe', { body: { token: 'short' } })).status, 429);
   } finally { await limited.close(); }
+});
+
+scenario('conformance: account basics (rename, sign out everywhere, delete) match the spec', async () => {
+  const ctx = await boot();
+  const { call } = ctx;
+  try {
+    const [ann, ben] = [await ctx.signup('Ann'), await ctx.signup('Ben')];
+    assert.deepEqual((await call(ann.token, 'GET', '/api/v1/me')).body.email, null, 'a name-only account has no address');
+
+    // rename
+    assert.deepEqual((await call(ann.token, 'PUT', '/api/v1/me', { body: { displayName: '  Anna  ' } })).body, { user: { id: ann.id, displayName: 'Anna' } });
+    assert.equal((await call(ann.token, 'GET', '/api/v1/me')).body.user.displayName, 'Anna');
+    for (const displayName of ['', '   ', 'x'.repeat(61), 'two\nlines', 5, undefined]) {
+      const bad = await call(ann.token, 'PUT', '/api/v1/me', { body: displayName === undefined ? {} : { displayName } });
+      assert.equal(bad.status, 422, String(displayName));
+      assert.equal(bad.body.errors[0].code, 'NAME_REQUIRED');
+    }
+    assert.equal((await call(null, 'PUT', '/api/v1/me', { body: { displayName: 'Nobody' } })).status, 401);
+
+    // sign out everywhere: the old token dies, the new one lives, other people are untouched
+    const again = ctx.auth.issue(ann.id);                                          // a second device, signed in before
+    const out = await call(ann.token, 'POST', '/api/v1/auth/sign-out-everywhere');
+    assert.equal(out.status, 200);
+    assert.equal((await call(ann.token, 'GET', '/api/v1/me')).status, 401, 'this device\'s old token');
+    assert.equal((await call(again, 'GET', '/api/v1/me')).status, 401, 'the other device');
+    assert.equal((await call(out.body.token, 'GET', '/api/v1/me')).status, 200, 'the fresh token');
+    assert.equal((await call(ben.token, 'GET', '/api/v1/me')).status, 200);
+    assert.equal((await call(null, 'POST', '/api/v1/auth/sign-out-everywhere')).status, 401);
+    ann.token = out.body.token;
+
+    // delete: games first, so the answer has something to count
+    const mine = (await call(ann.token, 'POST', G, { body: { aiPlayers: 0 } })).body.gameId;                    // a lobby Ann created
+    const bens = (await call(ben.token, 'POST', G, { body: { aiPlayers: 0 } })).body.gameId;                    // a lobby Ben created, Ann joined
+    assert.equal((await call(ann.token, 'POST', P('join'), { id: bens })).status, 200);
+    const running = (await call(ben.token, 'POST', G, { body: { aiPlayers: 1 } })).body.gameId;                  // a running game
+    assert.equal((await call(ann.token, 'POST', P('join'), { id: running })).status, 200);
+    assert.equal((await call(ben.token, 'POST', P('start'), { id: running, body: {} })).status, 200);
+
+    const refused = await call(ann.token, 'POST', '/api/v1/me/delete', { body: { confirm: 'delete' } });
+    assert.equal(refused.status, 422);
+    assert.equal(refused.body.errors[0].code, 'CONFIRMATION_REQUIRED');
+    assert.equal((await call(ann.token, 'POST', '/api/v1/me/delete', { body: {} })).status, 422);
+    assert.equal((await call(null, 'POST', '/api/v1/me/delete', { body: { confirm: 'DELETE' } })).status, 401);
+    assert.equal((await call(ann.token, 'GET', '/api/v1/me')).status, 200, 'a refused deletion changes nothing');
+
+    const gone = await call(ann.token, 'POST', '/api/v1/me/delete', { body: { confirm: 'DELETE' } });
+    assert.equal(gone.status, 200);
+    assert.deepEqual(gone.body, { deleted: true, lobbiesCancelled: 1, lobbiesLeft: 1, gamesHandedToAi: 1 });
+    assert.equal((await call(ann.token, 'GET', '/api/v1/me')).status, 401, 'the token stopped working at once');
+    assert.equal((await call(ann.token, 'POST', '/api/v1/me/delete', { body: { confirm: 'DELETE' } })).status, 401, 'and so a second deletion is refused');
+    assert.equal((await call(ben.token, 'GET', P('lobby'), { id: mine })).status, 404, 'the lobby she created is gone');
+    assert.equal((await call(ben.token, 'GET', P('lobby'), { id: bens })).body.seats.some((s) => s.userId === ann.id), false, 'she left the lobby she joined');
+    const seat = (await call(ben.token, 'GET', P('lobby'), { id: running })).body.seats.find((s) => s.userId === ann.id);
+    assert.equal(seat.displayName, 'Former player');
+    assert.ok(['HAWK', 'DIPLOMAT', 'OPPORTUNIST'].includes(seat.ai), 'an AI player took her seat in the running game');
+  } finally { await ctx.close(); }
 });
 
 scenario('conformance: AI players in the lobby match the spec', async () => {

@@ -182,6 +182,54 @@ class MemTx {
     return before - this.d.loginLinks.length;
   }
 
+  // ── account basics (mirrors migration 010) ──
+  /** The caller's own account details, or null if there is no such (undeleted) user. */
+  async getAccount(userId) {
+    const u = this.d.users.find((x) => x.id === userId);
+    return u && !u.deletedAt ? { id: u.id, displayName: u.displayName, email: u.email ?? null, aiPersona: u.aiPersona ?? null } : null;
+  }
+
+  /** Changes a person's display name. False for AI players, deleted accounts and unknown ids. */
+  async renameUser(userId, displayName) {
+    const u = this.d.users.find((x) => x.id === userId);
+    if (!u || u.deletedAt || u.aiPersona) return false;
+    u.displayName = displayName;
+    return true;
+  }
+
+  /** Locks the account row for the rest of the transaction (a no-op here). False if the account is gone or deleted. */
+  async lockUser(userId) {
+    const u = this.d.users.find((x) => x.id === userId);
+    return !!u && !u.deletedAt;
+  }
+
+  /** Cancels every login token issued so far for this account. Returns the new session version, or null for an unknown or deleted account. */
+  async bumpSessionVersion(userId) {
+    const u = this.d.users.find((x) => x.id === userId);
+    if (!u || u.deletedAt) return null;
+    u.sessionVersion = (u.sessionVersion ?? 0) + 1;
+    return u.sessionVersion;
+  }
+
+  /**
+   * Erases everything that identifies the person but keeps the row (games refer to it): email, turn-email setting, pending
+   * sign-in links for that address and sent-mail records go; the name becomes `displayName`; tokens stop working.
+   * `aiPersona` hands the account to the server's AI (used when it still holds seats in running games).
+   */
+  async anonymizeUser(userId, { displayName, aiPersona = null, at }) {
+    const u = this.d.users.find((x) => x.id === userId);
+    if (!u || u.deletedAt) return false;
+    if (u.email) this.d.loginLinks = this.d.loginLinks.filter((l) => l.email !== u.email);
+    this.d.turnNotifications = this.d.turnNotifications.filter((n) => n.userId !== userId);
+    delete u.email;
+    delete u.turnEmailsSince;
+    u.displayName = displayName;
+    if (aiPersona) u.aiPersona = aiPersona;
+    u.deletedAt = at;
+    u.sessionVersion = (u.sessionVersion ?? 0) + 1;
+    return true;
+  }
+
   // ── opt-in turn emails (mirrors migration 009) ──
   /** { hasEmail, turnEmailsSince } for one account, or null if there is no such user. */
   async getNotificationSettings(userId) {
@@ -381,6 +429,11 @@ export function createMemoryStore() {
   const store = {
     hooks,
     get data() { return data; },
+    /** The session version a token must carry, or null for an unknown or deleted account. Read outside any transaction: it runs on every request. */
+    async getSessionVersion(userId) {
+      const u = data.users.find((x) => x.id === userId);
+      return u && !u.deletedAt ? (u.sessionVersion ?? 0) : null;
+    },
     async withTransaction(fn) {
       const copy = clone(data);
       const result = await fn(new MemTx(copy, hooks));

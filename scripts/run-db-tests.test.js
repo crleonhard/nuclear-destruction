@@ -39,6 +39,6 @@ test('main: help exits 0, bad usage and a missing database exit 2, all without t
 });
 
 test('every file the database run depends on exists (a rename would otherwise fail only on a real database)', () => {
-  assert.equal(TEST_FILES.length, 10);
+  assert.equal(TEST_FILES.length, 11);
   for (const f of TEST_FILES) assert.ok(existsSync(new URL(`../${f}`, import.meta.url)), `${f} is missing`);
 });

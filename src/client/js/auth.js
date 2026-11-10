@@ -65,3 +65,27 @@ export async function setTurnEmails(api, enabled) {
 export async function unsubscribeTurnEmails(api, token) {
   await api.post('/api/v1/auth/unsubscribe', { token });
 }
+
+// ── account basics ──
+
+/** The word a person types to confirm deleting their account. */
+export const DELETE_WORD = 'DELETE';
+
+/** Changes the name other players see. Resolves to the saved user. */
+export async function renameMe(api, displayName) {
+  const { user } = await api.put('/api/v1/me', { displayName });
+  return user;
+}
+
+/** Cancels every login token, this device's included, and keeps this device signed in with the fresh one the server returns. */
+export async function signOutEverywhere(api, tokens) {
+  const { token } = await api.post('/api/v1/auth/sign-out-everywhere', {});
+  tokens.set(token);
+}
+
+/** Deletes the account for good and forgets the token. Resolves to { lobbiesCancelled, lobbiesLeft, gamesHandedToAi }. */
+export async function deleteMyAccount(api, tokens) {
+  const { deleted, ...counts } = await api.post('/api/v1/me/delete', { confirm: DELETE_WORD });
+  tokens.clear();
+  return counts;
+}

@@ -8,7 +8,10 @@ All errors look like `{ "errors": [{ "code", "field", "message" }] }`. Authentic
 |---|---|---|
 | GET | `/healthz` | no auth |
 | POST | `/api/v1/users` | `{displayName}` -> `{user, token}`; only when `allowSignup` is on |
-| GET | `/api/v1/me` | `{user, notifications: {available, canEnable, turnEmails}}` |
+| GET | `/api/v1/me` | `{user, email, notifications: {available, canEnable, turnEmails}}` |
+| PUT | `/api/v1/me` | `{displayName}` change the name other players see; 422 `NAME_REQUIRED` |
+| POST | `/api/v1/auth/sign-out-everywhere` | cancels every token (open event streams are closed) and returns `{token}`, a fresh one for the caller |
+| POST | `/api/v1/me/delete` | `{confirm: "DELETE"}` erases the person's identifying data and hands running games to AI players; 422 `CONFIRMATION_REQUIRED` |
 | PUT | `/api/v1/me/notifications` | `{turnEmails: boolean}` opt in or out of turn emails; 409 `EMAIL_REQUIRED` for accounts without an address, 422 `NOT_BOOLEAN`, 404 when the server sends no email |
 | POST | `/api/v1/auth/unsubscribe` | `{token}` from the link in a turn email; no sign-in; only switches the emails off; 400 `LINK_INVALID` |
 | GET | `/api/v1/games` | the caller's games |

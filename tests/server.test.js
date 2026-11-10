@@ -239,3 +239,52 @@ test('startup: turn emails are opt-in end to end: off by default, one mail when 
     assert.equal(me.notifications.available, false);
   } finally { await on.stop(); await none.stop(); }
 });
+
+test('startup: sign out everywhere and account deletion work through the real server: tokens die, event streams hang up, the address can be used again', async () => {
+  const sent = [];
+  const on = await startServer({ env: env({ MAIL_TRANSPORT: 'console', APP_URL: 'http://localhost:3000', WORKER_INTERVAL_MS: '3600000' }), mailer: { async send(m) { sent.push(m); } }, logger: quiet() });
+  try {
+    const base = `http://127.0.0.1:${on.port}`;
+    const call = async (method, path, body, token) => json(await fetch(base + path, {
+      method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined,
+    }));
+    const signIn = async (displayName) => {
+      await call('POST', '/api/v1/auth/email-link', { email: 'ada@example.org' });
+      const secret = /#\/verify\/([A-Za-z0-9_-]{43})/.exec(sent.at(-1).text)[1];
+      return call('POST', '/api/v1/auth/verify', { token: secret, ...(displayName ? { displayName } : {}) });
+    };
+    const first = (await signIn('Ada')).body;
+    const phone = first.token;
+    assert.equal((await call('GET', '/api/v1/me', null, phone)).body.email, 'ada@example.org');
+
+    // an open event stream is hung up when the person signs out everywhere
+    const { gameId } = (await call('POST', '/api/v1/games', { aiPlayers: 2 }, phone)).body;
+    const controller = new AbortController();
+    const stream = await fetch(`${base}/api/v1/games/${gameId}/stream?token=${encodeURIComponent(phone)}`, { signal: controller.signal });
+    const reader = stream.body.getReader();
+    assert.match(new TextDecoder().decode((await reader.read()).value), /event: ready/);
+    const out = await call('POST', '/api/v1/auth/sign-out-everywhere', {}, phone);
+    assert.equal(out.status, 200);
+    const ended = await Promise.race([reader.read().then((r) => r.done), new Promise((r) => setTimeout(() => r('still open'), 3000))]);
+    controller.abort();
+    assert.equal(ended, true, 'the stream was closed by the server');
+
+    assert.equal((await call('GET', '/api/v1/me', null, phone)).status, 401, 'the old token');
+    const laptop = out.body.token;
+    assert.equal((await call('GET', '/api/v1/me', null, laptop)).status, 200, 'the fresh one');
+    const later = (await signIn()).body;                                          // signing in again after that: a token under the current version
+    assert.equal((await call('GET', '/api/v1/me', null, later.token)).status, 200);
+    assert.equal(later.user.id, first.user.id);
+
+    // deleting: the token stops, and the address starts a brand new account that must choose a name
+    assert.equal((await call('POST', '/api/v1/me/delete', { confirm: 'DELETE' }, later.token)).status, 200);
+    assert.equal((await call('GET', '/api/v1/me', null, later.token)).status, 401);
+    assert.equal((await call('GET', '/api/v1/me', null, laptop)).status, 401);
+    const asked = await signIn();
+    assert.equal(asked.status, 422);
+    assert.equal(asked.body.errors[0].code, 'NAME_REQUIRED', 'the old account is gone, so this address is new again');
+    const fresh = (await signIn('Ada Two')).body;
+    assert.notEqual(fresh.user.id, first.user.id);
+    assert.equal((await call('GET', '/api/v1/me', null, fresh.token)).body.user.displayName, 'Ada Two');
+  } finally { await on.stop(); }
+});

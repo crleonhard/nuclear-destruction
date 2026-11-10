@@ -58,6 +58,8 @@ npm start                the production server (needs DATABASE_URL, AUTH_SECRET 
 - `tests/login.test.js`, `tests/mail.test.js` and `tests/client-login.test.js` check email sign-in: the flow over real HTTP (single use, expiry,
   rate limits, no account discovery), the SMTP client against a scripted mail server over real TLS and STARTTLS, and the sign-in screens.
   `tests/server-process.test.js` also signs in through a real server process that delivers the email over SMTP.
+- `tests/account.test.js` and `tests/client-account.test.js` check account basics: names, tokens that die when you sign out everywhere, and deleting an
+  account (what is erased, and what happens to lobbies, running games and finished games), plus the account and privacy pages.
 - `tests/notifications.test.js` and `tests/client-notifications.test.js` check turn emails: who may opt in, who gets which mail and when, that nothing
   is sent twice (including two workers at once, on PostgreSQL), the daily cap, a failing mail server, and the one-click stop link and its page.
 - `tests/client-logic.test.js` and `tests/client.test.js` check the browser client without a browser: its pure logic, how the
@@ -79,9 +81,10 @@ The browser client is verified in a real browser by `npm run e2e` (a full three-
 phone width, dark mode, accessibility names, no console or CSP errors). It has been run on Linux only; the PostgreSQL
 database tests above have been run on Windows.
 
-Email sign-in, AI players, the game limit and turn emails are covered by the tests listed above. Migration 009 and the PostgreSQL versions of the
-turn-email store methods have so far only been run through the in-memory store (there was no PostgreSQL where they were written), so your CI's
-`database` job is their first real run: check its result for `tests/notifications.test.js` and the schema test, or run `npm run test:db:docker`.
+Email sign-in, AI players, the game limit, turn emails and account basics are covered by the tests listed above. Migration 009 (turn emails) has run green
+on PostgreSQL in CI. Migration 010 and the PostgreSQL versions of the account store methods have so far only been run through the in-memory store (there
+was no PostgreSQL where they were written), so your CI's `database` job is their first real run: check its result for `tests/account.test.js`
+and the schema test, or run `npm run test:db:docker`.
 
 ## Game limits
 
@@ -120,6 +123,32 @@ How it behaves:
 - **Worker:** emails are sent at the end of each worker pass (`src/worker.js`), after turns are resolved and AI players have moved, so a new turn's mail goes
   out in the same pass that opens it. A mail problem is logged and never stops turn resolution. On Render's free plan the worker sleeps when the service
   does, so keep the uptime monitor pinging `/healthz`.
+
+## Accounts and privacy
+
+The account page (`#/account`, reached by clicking your name in the header) and the privacy page (`#/privacy`, linked in the footer, readable before signing in):
+
+- **Change name.** `PUT /api/v1/me`. Names are 1 to 60 characters, trimmed, no control characters, and need not be unique (as before). The change shows everywhere at once,
+  including in running games, because names are looked up when a page is drawn.
+- **Sign out on every device.** `POST /api/v1/auth/sign-out-everywhere`. Every token carries the `session_version` it was issued under (`users.session_version`,
+  migration 010) and is accepted only while that equals the account's current number; signing out everywhere adds one. The caller gets a fresh token so
+  the device that asked stays signed in, every other device gets a 401 on its next request, and the person's open event streams are closed by the
+  server. Tokens issued before the upgrade carry no number and count as 0, so nobody was signed out by deploying it. The check is one small query per
+  request. A token for the right account but a version the account has not reached is refused too.
+- **Delete account.** `POST /api/v1/me/delete` with `{"confirm": "DELETE"}` (a POST because DELETE requests carry no body in this API). The account row stays, because
+  finished games refer to it, but it is anonymized in one transaction: email, turn-email setting, pending sign-in links for the address and sent-mail records are erased,
+  the name becomes "Deleted player", and all tokens stop at once. The address is free again, so signing in with it later makes a brand new account with none of the old history.
+  What happens to games:
+  - a lobby the person **created** is cancelled, with its AI seats (anyone who had joined it loses it, exactly as with "Cancel game");
+  - a lobby they only **joined**: they leave it;
+  - a game that is **running**: an AI player takes over the seat (persona picked at random, named "Former player"), so nobody waits for someone who is gone.
+    AI players never forfeit and send no messages; if no person is left the server plays the game out. The new AI player moves straight away;
+  - a **finished** game is untouched except that the name shown is "Deleted player".
+  Orders, messages and news the person already sent stay part of those games, without a name or an address. The deletion takes the same per-person row lock as game
+  creation, so a game cannot be created for an account at the moment it is deleted; a person who has just been deleted gets a 404 if they try.
+- **Privacy note.** The privacy page says, in plain words, what is stored (address, name, game actions, sign-in link fingerprints for about a day, a record of sent turn
+  emails), what other players see, that there are no cookies or tracking (the browser keeps one sign-in token), and how to delete. It describes this software; whoever
+  runs a site should add anything specific to their setup (who to contact, which mail provider and host they use) to `src/client/js/views/privacy.js`.
 
 ## Continuous integration
 
@@ -212,7 +241,7 @@ Things worth knowing:
   `TRUST_PROXY=true` so the limit sees the real visitor and not the proxy (on Render use `CLIENT_IP_HEADER` instead, see "Deploying").
 - **Errors are visible:** if the mail server cannot be reached the person is told to try again, and the server logs the reason
   (never the address or the link).
-- **Sessions:** signing in gives the usual login token, valid 30 days. Tokens are stateless, so "Sign out" ends the session on that
-  browser only; there is no "sign out everywhere" yet. Changing `AUTH_SECRET` signs everyone out.
+- **Sessions:** signing in gives the usual login token, valid 30 days. "Sign out" forgets it on that browser; "Sign out on every device" on the
+  account page cancels every token at once (see "Accounts and privacy"). Changing `AUTH_SECRET` still signs everyone out.
 - **Development:** `npm run dev` prints each "email" in the terminal. `MAIL_TRANSPORT=console` does the same anywhere but the server
   refuses it when `NODE_ENV=production`, because anyone who could read the log could sign in as anybody.

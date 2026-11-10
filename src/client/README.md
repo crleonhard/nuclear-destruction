@@ -40,6 +40,9 @@ with `ALLOW_SIGNUP=true`, a display name. The link is `/#/verify/<secret>`. The 
 any server log, and the page waits for a click before using it, so a mail scanner that opens links cannot use it up.
 Afterwards the rest of the client only sees a token.
 
+Account: clicking your name in the header opens `#/account` (`views/account.js`): rename, "Sign out on every device" (the server returns a fresh token, which replaces the stored one),
+and a delete form whose button stays disabled until `DELETE` is typed exactly. `#/privacy` (`views/privacy.js`) is public.
+
 Turn emails: the home page shows an "Email notifications" card (`views/email-settings.js`) only when the server says it sends email; it is a single checkbox
 that saves immediately and goes back to what the server has if the save fails. The "stop these emails" link in each mail opens `#/unsubscribe/<token>`
 (`views/unsubscribe.js`), which works signed in or out and, like the sign-in page, waits for a click.
@@ -49,6 +52,7 @@ that saves immediately and goes back to what the server has if the save fails. T
 - `tests/client-logic.test.js`: the pure modules, run in Node with small fakes.
 - `tests/client-login.test.js`: the login and verify screens, run against a small fake DOM.
 - `tests/client-notifications.test.js`: the email settings card and the stop-link page, same fake DOM.
+- `tests/client-account.test.js`: the account page and the privacy page, same fake DOM.
 - `tests/client.test.js`: how the server delivers the client (types, security headers, path traversal), that every
   import resolves, the unsafe-pattern ban, and that every API call matches the spec.
 - `npm run e2e`: plays a whole game through the real UI in a browser (see `tests/e2e/README.md`).

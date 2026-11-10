@@ -127,7 +127,7 @@ export async function startServer({ env = process.env, store = null, mailer = nu
       store = createPgStore(pool);
     }
 
-    const auth = createTokenAuth({ secret: config.authSecret });
+    const auth = createTokenAuth({ secret: config.authSecret, store });
     let login = null;
     let notifications = null;
     if (config.mail) {

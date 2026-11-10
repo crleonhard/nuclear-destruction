@@ -15,6 +15,7 @@
 //   - A new account's display name is asked for only after the link is opened, so it is chosen by someone
 //     who has proven they own the address.
 
+import { cleanDisplayName } from '../app/account.js';
 import crypto from 'node:crypto';
 import { HttpError } from './app.js';
 
@@ -93,12 +94,11 @@ export function createEmailLogin({
       const existing = await tx.findUserByEmail(link.email);
       if (existing) return existing;
       // New address: a name is needed. Throwing rolls the transaction back, so the link stays usable.
-      const name = typeof displayName === 'string' ? displayName.trim() : '';
-      if (!name) throw err(422, 'NAME_REQUIRED', 'Choose the name other players will see.', 'displayName');
-      if (name.length > 60 || /[\u0000-\u001f\u007f]/.test(name)) throw err(422, 'NAME_REQUIRED', 'Names are 1 to 60 characters with no line breaks.', 'displayName');
-      return (await tx.findOrCreateUserByEmail(link.email, name)).user;
+      const name = cleanDisplayName(displayName);
+      if (!name.ok) throw err(422, 'NAME_REQUIRED', name.message, 'displayName');
+      return (await tx.findOrCreateUserByEmail(link.email, name.name)).user;
     });
-    return { user, token: auth.issue(user.id) };
+    return { user, token: auth.issueFor ? await auth.issueFor(user.id) : auth.issue(user.id) };
   }
 
   return { requestLink, verifyLink };
