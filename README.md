@@ -40,7 +40,7 @@ npm run build:openapi    regenerate docs/api/* (a test fails if they drift from 
 npm run migrate -- up    apply migrations (needs DATABASE_URL)
 npm run dev              the whole game at http://localhost:3000 with throwaway in-memory data; sign-in links are printed in the terminal
 npm run dev -- --name-signup   same, but sign up by typing a name (quick way to be several players)
-npm run e2e              play a full game through the real UI in a browser (needs Python + Playwright; see tests/e2e/README.md)
+npm run e2e              play a full game, the end-of-game screens, and email sign-in / AI lobby / turn emails / account page in a real browser (needs Python + Playwright; see tests/e2e/README.md)
 npm start                the production server (needs DATABASE_URL, AUTH_SECRET and mail settings; see "Signing in" below and src/http/README.md)
 ```
 
@@ -77,7 +77,7 @@ back and re-applying), the database constraints, triggers and SQL functions, the
 full game checked against the API spec, and the real entry point (`node src/server.js`) booting on PostgreSQL,
 surviving a restart, shutting down cleanly, and failing clearly when the database is unreachable.
 
-The browser client is verified in a real browser by `npm run e2e` (a full three-player game, the end-of-game screens,
+The browser client is verified in a real browser by `npm run e2e` (a full three-player game, the end-of-game screens, email sign-in, the AI lobby, turn emails, the account page,
 phone width, dark mode, accessibility names, no console or CSP errors). It has been run on Linux only; the PostgreSQL
 database tests above have been run on Windows.
 
@@ -157,7 +157,7 @@ The account page (`#/account`, reached by clicking your name in the header) and 
 - **Tests:** the whole suite on Node 20 and 22, with in-memory data.
 - **PostgreSQL:** the same code against a real PostgreSQL 16 (`npm run test:db`): the store, migrations up, all the way down and up again,
   constraints, email sign-in, AI players, the HTTP layer and the API contract.
-- **Browser:** plays a full game through the real UI in Chromium (`npm run e2e`); screenshots are kept as a downloadable artifact for 7 days.
+- **Browser:** plays a full game, the end-of-game screens and the sign-in / AI lobby / turn-email / account flows through the real UI in Chromium (`npm run e2e`); screenshots are kept as a downloadable artifact for 7 days.
 
 To make Render wait for green checks, set the service's Auto-Deploy to "After CI checks pass" (Settings > Build & Deploy). Do that once CI
 has been green for a few runs, so a check you have not seen pass yet cannot block a deploy.

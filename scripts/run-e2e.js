@@ -7,7 +7,7 @@
 //   pip install playwright
 //   playwright install chromium
 //
-// It starts its own throwaway servers (in-memory data, a free port), so it needs no database and touches nothing.
+// It starts its own throwaway servers (in-memory data, free ports), so it needs no database and touches nothing.
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startServer } from '../src/server.js';
 import { startFinishedFixture } from '../tests/e2e/finished-fixture.js';
+import { startAccountFixture } from '../tests/e2e/account-fixture.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const quiet = { log() {}, warn() {}, error() {} };
@@ -70,6 +71,13 @@ export async function main(argv = process.argv.slice(2)) {
   writeFileSync(fixtureFile, JSON.stringify(fx.fixture));
   try { results.push(['finished games', await runPython(python.cmd, 'tests/e2e/finished-game.py', [`http://127.0.0.1:${fx.port}`, fixtureFile, '--shots', shots])]); }
   finally { await fx.stop(); }
+
+  console.log('\n=== Email sign-in, the AI lobby, turn emails and the account page ===');
+  const accounts = await startAccountFixture();
+  try {
+    results.push(['accounts and email', await runPython(python.cmd, 'tests/e2e/account-flows.py',
+      [`http://127.0.0.1:${accounts.port}`, `http://127.0.0.1:${accounts.controlPort}`, '--shots', shots])]);
+  } finally { await accounts.stop(); }
 
   console.log('\n=== Browser test results ===');
   for (const [name, code] of results) console.log(`${code === 0 ? 'PASS' : 'FAIL'}  ${name}`);
