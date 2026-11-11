@@ -29,7 +29,12 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
-      # Optional: opt-in turn emails use the same mail settings. Defaults shown; remove the comment marks to change them.
+      # Optional settings, defaults shown; remove the comment marks to change them.
+      # - key: WORKER_INTERVAL_MS
+      #   value: "300000"                    # the worker's longest sleep; it wakes at the next deadline otherwise. 60000 = check every minute
+      # - key: ABANDONED_LOBBY_DAYS
+      #   value: "14"                       # lobbies nobody has joined for this long are removed; 0 = never
+      # Opt-in turn emails use the mail settings above:
       # - key: NOTIFY_REMINDER_HOURS
       #   value: "4"
       # - key: NOTIFY_DAILY_LIMIT

@@ -11,6 +11,8 @@
 | `getPackage(store, {gameId, userId})` | The caller's start-of-turn view; other players' private data is never included. `packageFor(tx, snap, me)` builds it inside a transaction; AI players get exactly the same |
 | `playAiTurns(store, gameId, now)` (`ai.js`) | Submits a final sheet for every living AI player that has not moved this turn. Runs after a game starts and after each resolution; the worker repeats it for any game still waiting |
 
+Abandoned-lobby cleanup lives in `cleanup.js`: `removeAbandonedLobbies(store, {now, maxAgeDays, batch})` finds lobbies whose latest seat or creation is older than the limit (`store.listIdleLobbies`), re-checks each under its game lock and removes it with `removeLobby`. The worker calls it once an hour.
+
 Account basics live in `account.js`: `renameAccount`, `signOutEverywhere` and `deleteAccount` (which cancels, leaves or hands over each of the person's games and anonymizes the account in one transaction). `lobby.js` exports `removeLobby`, shared by "Cancel game" and account deletion.
 
 Turn emails live in `notifications.js`: `createNotifications({store, mailer, secret, appUrl, ...})` returns `preferences`, `setTurnEmails`, `unsubscribe` and
@@ -40,5 +42,5 @@ import { createPgStore } from './src/store/postgres.js';
 import { resolveDueTurns } from './src/app/pipeline.js';
 
 const store = createPgStore(new Pool({ connectionString: process.env.DATABASE_URL }));
-setInterval(() => resolveDueTurns(store, new Date()).catch(console.error), 60_000);
+setInterval(() => resolveDueTurns(store, new Date()).catch(console.error), 60_000);   // the simplest way; src/worker.js sleeps until the next deadline instead
 ```

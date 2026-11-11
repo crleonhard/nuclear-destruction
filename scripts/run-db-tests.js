@@ -34,6 +34,8 @@ export const TEST_FILES = [
   'tests/ai-play.test.js',                   // AI players on PostgreSQL: lobby, taking turns, the worker safety net, self-play
   'tests/game-limit.test.js',                // the limit on open games (incl. simultaneous requests) and cancelling a lobby, on PostgreSQL
   'tests/head.test.js',                      // HEAD requests (uptime monitors) on the PostgreSQL-backed server
+  'tests/next-deadline.test.js',             // the worker's "sleep until" query on PostgreSQL
+  'tests/lobby-cleanup.test.js',             // abandoned-lobby cleanup on PostgreSQL: the idle-time queries, the lock re-check, the limit freed
   'tests/account.test.js',                   // account basics on PostgreSQL: rename, sign out everywhere, delete (games handed to AI, data erased)
   'tests/notifications.test.js',             // opt-in turn emails on PostgreSQL: claims, caps, reminders, and two workers at once
 ];

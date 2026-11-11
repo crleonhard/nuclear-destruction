@@ -41,7 +41,8 @@ export function createLobbyView({ ctx, gameId, resync }) {
           h('button', { type: 'button', class: 'danger', disabled: busy, onClick: cancelGame }, 'Yes, cancel the game'),
           ' ',
           h('button', { type: 'button', disabled: busy, onClick: () => { confirmingCancel = false; render(); } }, 'Keep it')]
-        : [h('p', { class: 'hint' }, 'Not going ahead? Cancelling frees one of your places for new games.'),
+        : [h('p', { class: 'hint' }, 'Not going ahead? Cancelling frees one of your places for new games.',
+          data.lobby.game.limits.abandonedAfterDays > 0 ? ` A game nobody joins for ${plural(data.lobby.game.limits.abandonedAfterDays, 'day')} is removed automatically.` : ''),
           h('button', { type: 'button', class: 'danger', disabled: busy, onClick: () => { confirmingCancel = true; render(); } }, 'Cancel game')]);
   }
 

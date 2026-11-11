@@ -24,7 +24,7 @@ async function until(fn, ms = 3000) {
 test('config: defaults and parsing', () => {
   const c = readConfig({ DATABASE_URL: 'postgres://x/y', AUTH_SECRET: SECRET });
   assert.deepEqual([c.store, c.port, c.host, c.allowSignup, c.corsOrigin, c.workerIntervalMs, c.shutdownGraceMs],
-    ['postgres', 3000, '0.0.0.0', false, null, 60_000, 5000]);
+    ['postgres', 3000, '0.0.0.0', false, null, 300_000, 5000]);
   const d = readConfig(env({ ALLOW_SIGNUP: 'true', CORS_ORIGIN: 'https://g.example', PORT: '8080', WORKER_INTERVAL_MS: '250' }));
   assert.deepEqual([d.store, d.port, d.allowSignup, d.corsOrigin, d.workerIntervalMs], ['memory', 8080, true, 'https://g.example', 250]);
   assert.equal(readConfig(env({ ALLOW_SIGNUP: 'yes' })).allowSignup, false); // only the exact word "true" opens sign-up
@@ -87,6 +87,19 @@ test('startup: the deadline worker is running (an overdue game resolves by itsel
       return snap.game.status === 'FINISHED' ? snap.game : null;
     });
     assert.equal(game.outcome, 'DRAW');                       // nobody submitted, all forfeited on the same turn
+  } finally { await s.stop(); }
+});
+
+test('startup: the worker catches up on overdue turns at once, even with a long maximum sleep', async () => {
+  const store = createMemoryStore();
+  const gameId = store.createGame({ creatorId: 1, seed: 5, forfeitAfterN: 1 });
+  for (const [i, country] of ['FRANCE', 'INDIA', 'JAPAN'].entries()) store.addPlayer({ gameId, userId: i + 1, country, startPopulation: 50 });
+  await startGame(store, { gameId, userId: 1 }, new Date(Date.now() - 48 * 3600 * 1000));
+  const started = Date.now();
+  const s = await startServer({ env: env({ WORKER_INTERVAL_MS: '3600000' }), store, logger: quiet() });   // it would otherwise sleep an hour before looking
+  try {
+    await until(async () => ((await store.withTransaction((tx) => tx.loadSnapshot(gameId))).game.status === 'FINISHED' ? true : null));
+    assert.ok(Date.now() - started < 3000, 'resolved right after startup, not after the first sleep');
   } finally { await s.stop(); }
 });
 
@@ -287,4 +300,35 @@ test('startup: sign out everywhere and account deletion work through the real se
     assert.notEqual(fresh.user.id, first.user.id);
     assert.equal((await call('GET', '/api/v1/me', null, fresh.token)).body.user.displayName, 'Ada Two');
   } finally { await on.stop(); }
+});
+
+test('config: ABANDONED_LOBBY_DAYS defaults to 14 and takes 0 (never) to 365', () => {
+  assert.equal(readConfig(MAIL_BASE).abandonedLobbyDays, 14);
+  assert.equal(readConfig({ ...MAIL_BASE, ABANDONED_LOBBY_DAYS: '0' }).abandonedLobbyDays, 0);
+  assert.equal(readConfig({ ...MAIL_BASE, ABANDONED_LOBBY_DAYS: '365' }).abandonedLobbyDays, 365);
+  for (const bad of ['-1', '366', '1.5', 'week']) assert.equal(problems({ ...MAIL_BASE, ABANDONED_LOBBY_DAYS: bad }).length, 1, bad);
+});
+
+test('startup: idle lobbies are removed by the running worker, the lobby view tells creators about it, and 0 turns it off', async () => {
+  const { createMemoryStore } = await import('../src/store/memory.js');
+  for (const days of ['14', '0']) {
+    const store = createMemoryStore();
+    const on = await startServer({ env: env({ ALLOW_SIGNUP: 'true', ABANDONED_LOBBY_DAYS: days, WORKER_INTERVAL_MS: '3600000' }), store, logger: quiet() });
+    try {
+      const base = `http://127.0.0.1:${on.port}`;
+      const call = async (method, path, body, token) => json(await fetch(base + path, {
+        method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined,
+      }));
+      const { token } = (await call('POST', '/api/v1/users', { displayName: 'Ann' })).body;
+      const idle = (await call('POST', '/api/v1/games', { aiPlayers: 1 }, token)).body.gameId;
+      const fresh = (await call('POST', '/api/v1/games', {}, token)).body.gameId;
+      assert.equal((await call('GET', `/api/v1/games/${idle}/lobby`, null, token)).body.game.limits.abandonedAfterDays, Number(days));
+      const old = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+      store.data.games.find((g) => g.id === idle).createdAt = old;
+      for (const p of store.data.players.filter((x) => x.gameId === idle)) p.joinedAt = old;
+      await on.worker.tick();
+      assert.equal((await call('GET', `/api/v1/games/${idle}/lobby`, null, token)).status, days === '14' ? 404 : 200, `idle lobby with ABANDONED_LOBBY_DAYS=${days}`);
+      assert.equal((await call('GET', `/api/v1/games/${fresh}/lobby`, null, token)).status, 200, 'a fresh lobby is never removed');
+    } finally { await on.stop(); }
+  }
 });

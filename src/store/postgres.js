@@ -401,6 +401,25 @@ class PgTx {
     if (startPopulation !== undefined) await this.q('UPDATE players SET start_population = $2 WHERE id = $1', [playerId, startPopulation]);
   }
 
+  /** When anything last happened in a lobby: its creation or the latest seat taken (a person joining, an AI added). Null if there is no such game. */
+  async lobbyLastActivity(gameId) {
+    const [r] = await this.q(
+      `SELECT GREATEST(g.created_at, COALESCE(max(p.joined_at), g.created_at)) AS last
+         FROM games g LEFT JOIN players p ON p.game_id = g.id WHERE g.id = $1 GROUP BY g.id`, [gameId]);
+    return r ? r.last : null;
+  }
+
+  /** Ids of lobbies whose last activity is older than `cutoff`, oldest game first, at most `limit`. */
+  async listIdleLobbies(cutoff, limit = 50) {
+    const rows = await this.q(
+      `SELECT g.id FROM games g LEFT JOIN players p ON p.game_id = g.id
+        WHERE g.status = 'LOBBY'
+        GROUP BY g.id
+       HAVING GREATEST(g.created_at, COALESCE(max(p.joined_at), g.created_at)) < $1
+        ORDER BY g.id LIMIT $2`, [cutoff, limit]);
+    return rows.map((r) => n(r.id));
+  }
+
   /**
    * How many unfinished (lobby or running) games this person created. Locks the person's row first, so two games
    * created at the same moment cannot both slip under a limit.
@@ -448,6 +467,14 @@ class PgTx {
        WHERE s.game_id = $1 ORDER BY t.number, s.player_id`, [gameId]))
       .map((r) => ({ playerId: n(r.player_id), payload: r.payload, source: r.source, turnNumber: r.number }));
     return { turns, events, sheets };
+  }
+
+  /** The earliest deadline among open turns of running games, or null when nothing is waiting on a deadline. */
+  async nextTurnDeadline() {
+    const [r] = await this.q(
+      `SELECT min(t.deadline_at) AS next FROM turns t JOIN games g ON g.id = t.game_id
+        WHERE t.status = 'OPEN' AND g.status = 'ACTIVE'`);
+    return r?.next ?? null;
   }
 
   async listDueTurns(now) {

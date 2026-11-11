@@ -180,7 +180,7 @@ export async function setStartPopulation(store, { gameId, userId, targetUserId, 
 }
 
 /** Public lobby view. The seed is never included. */
-export async function getLobby(store, { gameId }) {
+export async function getLobby(store, { gameId, abandonedAfterDays = 0 }) {
   return store.withTransaction(async (tx) => {
     const snap = await tx.loadSnapshot(gameId);
     if (!snap.game) return fail(404, 'NOT_FOUND', 'No such game');
@@ -195,7 +195,7 @@ export async function getLobby(store, { gameId }) {
       game: {
         id: g.id, status: g.status, creatorId: g.creatorId, turnNumber: g.turnNumber,
         settings: { turnDeadlineHours: g.turnDeadlineHours, forfeitAfterN: g.forfeitAfterN },
-        limits: { minPlayers: CONFIG.minPlayers, maxPlayers: CONFIG.maxPlayers },
+        limits: { minPlayers: CONFIG.minPlayers, maxPlayers: CONFIG.maxPlayers, abandonedAfterDays },
       },
       seats,
       countries: COUNTRIES.map((c) => ({ country: c, takenBy: seats.find((s) => s.country === c)?.displayName ?? null })),

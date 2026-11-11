@@ -235,7 +235,7 @@ const schemas = {
       creatorId: int({ minimum: 1 }),
       turnNumber: nullable(int({ minimum: 1 })),
       settings: obj({ turnDeadlineHours: int({ minimum: 1, maximum: 168 }), forfeitAfterN: int({ minimum: 0, maximum: 30, description: '0 = never forfeit.' }) }),
-      limits: obj({ minPlayers: int(), maxPlayers: int() }),
+      limits: obj({ minPlayers: int(), maxPlayers: int(), abandonedAfterDays: int({ minimum: 0, description: 'A lobby nobody has joined for this many days is removed automatically; 0 means lobbies are never removed. Games that have started are never removed.' }) }),
     }),
     seats: arr(ref('Seat')),
     countries: arr(obj({ country: ref('Country'), takenBy: nullable(str()) })),

@@ -6,8 +6,9 @@ import { createLobbyView } from '../src/client/js/views/lobby.js';
 
 const ME = 1;
 const seat = (userId, extra = {}) => ({ userId, displayName: `Seat ${userId}`, country: null, startPopulation: null, ai: null, ...extra });
+let abandonedAfterDays = 0;
 const data = (seats, creatorId = ME) => ({
-  lobby: { game: { id: 7, status: 'LOBBY', creatorId, turnNumber: null, settings: { turnDeadlineHours: 24, forfeitAfterN: 5 }, limits: { minPlayers: 3, maxPlayers: 9 } }, seats, countries: [] },
+  lobby: { game: { id: 7, status: 'LOBBY', creatorId, turnNumber: null, settings: { turnDeadlineHours: 24, forfeitAfterN: 5 }, limits: { minPlayers: 3, maxPlayers: 9, abandonedAfterDays } }, seats, countries: [] },
   member: true,
 });
 
@@ -80,4 +81,17 @@ test('cancel: it sits alongside the AI controls without interfering with them', 
   assert.ok(button(c.el, 'Add AI player'));
   await click(button(c.el, 'Cancel game'));
   assert.ok(button(c.el, 'Add AI player'), 'asking to cancel does not remove other controls');
+}));
+
+test('cancel: the creator is told when idle lobbies are removed automatically, with the number of days the server uses', withDom(async () => {
+  try {
+    abandonedAfterDays = 14;
+    assert.match(textOf(lobby(people).el), /A game nobody joins for 14 days is removed automatically\./);
+    abandonedAfterDays = 1;
+    assert.match(textOf(lobby(people).el), /nobody joins for 1 day is removed/);
+    abandonedAfterDays = 0;
+    assert.doesNotMatch(textOf(lobby(people).el), /removed automatically/, 'nothing is promised when the server never removes lobbies');
+    abandonedAfterDays = 14;
+    assert.doesNotMatch(textOf(lobby(people, { userId: 2 }).el), /removed automatically/, 'guests have no cancel card, so no sentence about it');
+  } finally { abandonedAfterDays = 0; }
 }));

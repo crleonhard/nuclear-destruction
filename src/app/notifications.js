@@ -65,6 +65,23 @@ export function planNotifications(candidates, now, { reminderHours = 4 } = {}) {
   return [...reminders, ...opens];
 }
 
+/**
+ * When the next DEADLINE_SOON reminder falls due, as a time in milliseconds, or null if none is coming. Pure. Reminders that are
+ * already due are not counted: they are in the current pass's plan (sent, or waiting under a cap, which has its own retry).
+ */
+export function nextReminderAt(candidates, now, { reminderHours = 4 } = {}) {
+  if (!(reminderHours > 0)) return null;
+  let next = null;
+  for (const c of candidates) {
+    if (c.deadlineAt <= now) continue;
+    if ((c.sentKinds ?? []).includes('DEADLINE_SOON')) continue;
+    const at = c.deadlineAt.getTime() - Math.min(reminderHours * HOUR, (c.deadlineAt - c.opensAt) / 3);
+    if (at <= now.getTime()) continue;
+    next = next === null ? at : Math.min(next, at);
+  }
+  return next;
+}
+
 const utc = (d) => `${d.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 const hoursLeft = (ms) => Math.max(1, Math.round(ms / HOUR));
 
@@ -130,13 +147,17 @@ export function createNotifications({
     return { ok: true, turnEmails: false };
   }
 
-  /** One worker pass: sends what is due, within the caps. Returns { sent, waiting, failed }. Never throws. */
+  /**
+   * One worker pass: sends what is due, within the caps. Never throws. Returns { sent, waiting, failed, nextAt }, where `nextAt`
+   * is when the worker should look again (milliseconds since the epoch, or null): the next reminder falling due, or a retry
+   * time if mail is waiting under a cap or the mail server refused something.
+   */
   async function tick(at = now()) {
     try {
       await store.withTransaction((tx) => tx.deleteTurnNotificationsSentBefore(new Date(at.getTime() - 30 * DAY)));
       const candidates = await store.withTransaction((tx) => tx.listTurnNotificationCandidates());
       const plan = planNotifications(candidates, at, { reminderHours });
-      if (!plan.length) return { sent: 0, waiting: 0, failed: 0 };
+      if (!plan.length) return { sent: 0, waiting: 0, failed: 0, nextAt: nextReminderAt(candidates, at, { reminderHours }) };
       const used = dailyLimit > 0 ? await store.withTransaction((tx) => tx.countTurnNotificationsSince(new Date(at.getTime() - DAY))) : 0;
       const budget = Math.min(maxPerPass, dailyLimit > 0 ? Math.max(0, dailyLimit - used) : Infinity);
       let sent = 0;
@@ -157,10 +178,15 @@ export function createNotifications({
           break;                                                  // the mail service is unwell: try again on the next pass
         }
       }
-      return { sent, waiting: plan.length - i, failed };
+      const waiting = plan.length - i;
+      // Mail still waiting: soon if this pass was cut short by its own limit, later if a daily cap or a sick mail server is the reason.
+      const retryIn = failed ? 5 * 60_000 : waiting ? (sent ? 60_000 : 10 * 60_000) : null;
+      const reminder = nextReminderAt(candidates, at, { reminderHours });
+      const times = [reminder, retryIn === null ? null : at.getTime() + retryIn].filter((x) => x !== null);
+      return { sent, waiting, failed, nextAt: times.length ? Math.min(...times) : null };
     } catch (e) {
       logger.error(`[notify] pass failed: ${e.message}`);
-      return { sent: 0, waiting: 0, failed: 0, error: e.message };
+      return { sent: 0, waiting: 0, failed: 0, error: e.message, nextAt: at.getTime() + 60_000 };
     }
   }
 

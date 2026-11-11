@@ -92,6 +92,8 @@ export function createApp({
   authLimit = { max: 20, windowMs: 15 * 60_000 },   // per client address, for each of the two sign-in endpoints
   trustProxy = false,         // true only behind a reverse proxy you control: the client address is then read from X-Forwarded-For
   maxOpenGamesPerUser = 3,    // unfinished games one person may have created at once (0 = no limit)
+  onSchedule = () => {},      // called when something happens that can bring the worker's next wake-up forward (a game starts, a turn resolves, someone opts in to turn emails)
+  abandonedLobbyDays = 0,     // shown to creators in the lobby: a lobby nobody joins for this long is removed (0 = never; the worker does the removing)
   clientIpHeader = null,      // behind a proxy that puts the visitor's address in one header (Render/Cloudflare: "cf-connecting-ip"); wins over trustProxy
   corsOrigin = null,          // e.g. 'https://game.example.com'
   writeLimit = { max: 60, windowMs: 60_000 },
@@ -102,7 +104,12 @@ export function createApp({
   const staticRoot = staticDir ? path.resolve(typeof staticDir === 'string' ? staticDir : fileURLToPath(staticDir)) : null;
   const hub = new EventEmitter();
   hub.setMaxListeners(0);
-  const notify = (gameId, event) => hub.emit(`game:${gameId}`, event);
+  // Events that can create or move a deadline, or a turn email, are also a reason for the worker to look again soon.
+  const WAKES_WORKER = new Set(['game_started', 'turn_resolved']);
+  const notify = (gameId, event) => {
+    hub.emit(`game:${gameId}`, event);
+    if (WAKES_WORKER.has(event.type)) onSchedule();
+  };
   // Open event streams by person, so signing out everywhere (or deleting the account) can hang up on every one of them.
   const streamsOf = new Map();
   const closeStreamsOf = (userId) => { for (const stop of [...(streamsOf.get(userId) ?? [])]) stop(); };
@@ -217,7 +224,9 @@ export function createApp({
 
   route('PUT', '/api/v1/me/notifications', async ({ userId, body }) => {
     if (!notifications) throw err(404, 'NOT_FOUND', 'Not found');
-    return notifications.setTurnEmails(userId, body.turnEmails);
+    const r = await notifications.setTurnEmails(userId, body.turnEmails);
+    if (r.ok) onSchedule();          // a reminder for a turn already running may now be due sooner than the worker's next wake-up
+    return r;
   });
 
   // The link at the bottom of every turn email. No sign-in: the token itself says who it is for, and it can only switch the emails off.
@@ -234,7 +243,7 @@ export function createApp({
     return r.ok ? { status: 201, body: { gameId: r.gameId } } : r;
   });
 
-  route('GET', '/api/v1/games/:id/lobby', async ({ params }) => getLobby(store, { gameId: gameId(params) }));
+  route('GET', '/api/v1/games/:id/lobby', async ({ params }) => getLobby(store, { gameId: gameId(params), abandonedAfterDays: abandonedLobbyDays }));
 
   route('POST', '/api/v1/games/:id/join', async ({ params, userId }) => {
     const id = gameId(params);

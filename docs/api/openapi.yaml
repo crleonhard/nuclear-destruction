@@ -2079,9 +2079,14 @@ components:
                   type: "integer"
                 maxPlayers:
                   type: "integer"
+                abandonedAfterDays:
+                  type: "integer"
+                  minimum: 0
+                  description: "A lobby nobody has joined for this many days is removed automatically; 0 means lobbies are never removed. Games that have started are never removed."
               required:
                 - "minPlayers"
                 - "maxPlayers"
+                - "abandonedAfterDays"
           required:
             - "id"
             - "status"

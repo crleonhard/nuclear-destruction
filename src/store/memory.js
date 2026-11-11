@@ -339,7 +339,7 @@ class MemTx {
     const g = {
       id: this.id(), creatorId, status: 'LOBBY', seed, turnDeadlineHours, forfeitAfterN,
       warDeclared: false, firstBattleDone: false, replenishCursor: 0, turnNumber: null,
-      outcome: null, winnerPlayerId: null, startedAt: null, endedAt: null,
+      outcome: null, winnerPlayerId: null, createdAt: new Date(), startedAt: null, endedAt: null,
     };
     this.d.games.push(g);
     return g.id;
@@ -350,7 +350,7 @@ class MemTx {
     this.d.players.push({
       id, gameId, userId, country: null, startPopulation: null, population: 0, cash: 0, thirds: 0, missiles: 0,
       abms: 0, bonusMissiles: 0, alive: true, forfeited: false, isDeclarer: false, missedStreak: 0,
-      joinedAt: new Date(1700000000000 + id * 1000),
+      joinedAt: new Date(),
     });
     return id;
   }
@@ -364,6 +364,24 @@ class MemTx {
       p.country = country;
     }
     if (startPopulation !== undefined) p.startPopulation = startPopulation;
+  }
+
+  /** When anything last happened in a lobby: its creation or the latest seat taken (a person joining, an AI added). Null if there is no such game. */
+  async lobbyLastActivity(gameId) {
+    const g = this.d.games.find((x) => x.id === gameId);
+    if (!g) return null;
+    return this.d.players.filter((p) => p.gameId === gameId).reduce((latest, p) => (p.joinedAt > latest ? p.joinedAt : latest), g.createdAt);
+  }
+
+  /** Ids of lobbies whose last activity is older than `cutoff`, oldest game first, at most `limit`. */
+  async listIdleLobbies(cutoff, limit = 50) {
+    const out = [];
+    for (const g of this.d.games) {
+      if (g.status !== 'LOBBY') continue;
+      if ((await this.lobbyLastActivity(g.id)) < cutoff) out.push(g.id);
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 
   /** How many unfinished (lobby or running) games this person created. The Postgres version also serializes per person. */
@@ -415,6 +433,16 @@ class MemTx {
     });
   }
 
+  /** The earliest deadline among open turns of running games, or null when nothing is waiting on a deadline. */
+  async nextTurnDeadline() {
+    let next = null;
+    for (const t of this.d.turns) {
+      if (t.status !== 'OPEN' || this.game(t.gameId)?.status !== 'ACTIVE') continue;
+      if (next === null || t.deadlineAt < next) next = t.deadlineAt;
+    }
+    return next;
+  }
+
   async listDueTurns(now) {
     return this.d.turns
       .filter((t) => t.status === 'OPEN' && t.deadlineAt <= now && this.game(t.gameId)?.status === 'ACTIVE')
@@ -425,6 +453,7 @@ class MemTx {
 
 export function createMemoryStore() {
   let data = emptyData();
+  let queue = Promise.resolve();
   const hooks = { failDuringSave: false };
   const store = {
     hooks,
@@ -434,18 +463,25 @@ export function createMemoryStore() {
       const u = data.users.find((x) => x.id === userId);
       return u && !u.deletedAt ? (u.sessionVersion ?? 0) : null;
     },
-    async withTransaction(fn) {
-      const copy = clone(data);
-      const result = await fn(new MemTx(copy, hooks));
-      data = copy; // commit; a throw above leaves `data` untouched
-      return result;
+    // Transactions run one at a time. A transaction works on a copy and replaces the data when it finishes, so two running
+    // at once would silently lose whichever finished first; the real database has row locks for this, this store has the queue.
+    // (A transaction must therefore never start another on the same store from inside itself: that would wait for itself.)
+    withTransaction(fn) {
+      const run = queue.then(async () => {
+        const copy = clone(data);
+        const result = await fn(new MemTx(copy, hooks));
+        data = copy; // commit; a throw above leaves `data` untouched
+        return result;
+      });
+      queue = run.then(() => {}, () => {});
+      return run;
     },
     // Lobby helpers (the real app does these through the lobby endpoints).
     createGame({ creatorId, seed, turnDeadlineHours = 24, forfeitAfterN = 5 }) {
       const g = {
         id: data.nextId++, creatorId, status: 'LOBBY', seed, turnDeadlineHours, forfeitAfterN,
         warDeclared: false, firstBattleDone: false, replenishCursor: 0, turnNumber: null,
-        outcome: null, winnerPlayerId: null, startedAt: null, endedAt: null,
+        outcome: null, winnerPlayerId: null, createdAt: new Date(), startedAt: null, endedAt: null,
       };
       data.games.push(g);
       return g.id;
@@ -455,7 +491,7 @@ export function createMemoryStore() {
       data.players.push({
         id, gameId, userId, country, startPopulation, population: 0, cash: 0, thirds: 0, missiles: 0, abms: 0,
         bonusMissiles: 0, alive: true, forfeited: false, isDeclarer: false, missedStreak: 0,
-        joinedAt: new Date(1700000000000 + id * 1000),
+        joinedAt: new Date(),
       });
       return id;
     },

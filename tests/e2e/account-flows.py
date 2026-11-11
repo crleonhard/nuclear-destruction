@@ -2,7 +2,7 @@
 
     python account-flows.py BASE_URL CONTROL_URL [--shots DIR]
 
-CONTROL_URL is the small control server from account-fixture.js: it lists the emails the app "sent" and runs a worker pass.
+CONTROL_URL is the small control server from account-fixture.js: it lists the emails the app "sent" and can run a worker pass.
 Needs: pip install playwright && playwright install chromium
 """
 import argparse, os, re, sys, json, time, urllib.request
@@ -154,6 +154,7 @@ with sync_playwright() as p:
     expect(A.get_by_role("heading", name=re.compile(r"^Game #\d+$"))).to_be_visible()
     gid = re.search(r"/games/(\d+)", A.url).group(1)
     expect(A.get_by_role("heading", name="Players (3 of 9)")).to_be_visible()
+    expect(A.get_by_text("A game nobody joins for 14 days is removed automatically.")).to_be_visible()   # the creator is told
     expect(A.get_by_text(re.compile(r"^AI · "))).to_have_count(2)
     expect(A.get_by_role("button", name="Start game")).to_be_enabled()           # two AIs and Ada are enough players
     shot(A, "25-ai-lobby")
@@ -225,10 +226,10 @@ with sync_playwright() as p:
     C.get_by_label("AI players (0 to 8)").fill("2")
     C.get_by_role("button", name="Create game").click()
     expect(C.get_by_role("heading", name=re.compile(r"^Game #\d+$"))).to_be_visible()
+    n = len(mails())                                                             # counted first: the app wakes the worker by itself when a game starts
     C.get_by_role("button", name="Start game").click()
     expect(C.get_by_role("heading", name="Your orders for this turn")).to_be_visible()
-    n = len(mails())
-    tick()
+    tick()                                                                       # a pass right now, in case the automatic one has not run yet
     turn_mail = wait_mail("cy@example.org", "#/unsubscribe/", n)
     assert re.search(r"turn 1 is open", turn_mail["subject"]), turn_mail["subject"]
     assert "You are playing" in turn_mail["text"] and "Deadline:" in turn_mail["text"], turn_mail["text"]

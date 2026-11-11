@@ -19,7 +19,7 @@ src/
                 (turn emails live in app/notifications.js)
   mail/        sending email: a small SMTP client and the mailers (smtp, console, memory)
   client/      the browser client: plain HTML, CSS and JavaScript (see src/client/README.md)
-  worker.js    resolves turns whose deadline has passed
+  worker.js    resolves turns when their deadline arrives (sleeps until then; see "The deadline worker")
   server.js    wires the pieces together; the only file that knows them all
 db/            migrations (SQL) and the migration runner
 docs/          rules.md, and the generated API spec in docs/api/
@@ -60,6 +60,8 @@ npm start                the production server (needs DATABASE_URL, AUTH_SECRET 
   `tests/server-process.test.js` also signs in through a real server process that delivers the email over SMTP.
 - `tests/account.test.js` and `tests/client-account.test.js` check account basics: names, tokens that die when you sign out everywhere, and deleting an
   account (what is erased, and what happens to lobbies, running games and finished games), plus the account and privacy pages.
+- `tests/worker-schedule.test.js` and `tests/next-deadline.test.js` check the deadline worker: the wake-up times it picks (with fake timers), what brings them forward, that real
+  deadlines are met on time, and the "next deadline" query (the second also on PostgreSQL).
 - `tests/notifications.test.js` and `tests/client-notifications.test.js` check turn emails: who may opt in, who gets which mail and when, that nothing
   is sent twice (including two workers at once, on PostgreSQL), the daily cap, a failing mail server, and the one-click stop link and its page.
 - `tests/client-logic.test.js` and `tests/client.test.js` check the browser client without a browser: its pure logic, how the
@@ -93,6 +95,34 @@ games count; finished games do not, and games a person only joined do not. Past 
 The creator can **cancel** a game that is still in its lobby (a "Cancel game" button, two clicks): it removes the game, everyone's seats and
 any AI players, and frees a place. This protects a small database from being filled with abandoned games and AI accounts.
 
+**Abandoned lobbies are removed automatically.** A lobby is abandoned when nothing has happened in it for `ABANDONED_LOBBY_DAYS` days (default **14**, `0` = never,
+at most 365): no one has joined and no AI has been added since it was created or last gained a seat. (Choosing a country or a start population does not count as
+activity.) Removing one is exactly what "Cancel game" does: its seats and AI accounts go, anyone who had joined loses it (connected screens get the
+`game_cancelled` event), and the creator gets the place back under the limit above. Only lobbies are ever touched: a game that has started, or finished, is
+never removed however old it is. The deadline worker looks once an hour, removes at most 50 lobbies per look, oldest first, and checks the lobby's age again under
+its lock, so a person joining at that very moment keeps it. The lobby page tells creators the number of days the server uses; there is no email warning before a lobby is removed.
+(Memory store only: games and seats now carry real creation and joining times, which the age is measured from. PostgreSQL always had them.)
+
+## The deadline worker
+
+`src/worker.js` resolves turns whose deadline has passed, lets AI players move, removes abandoned lobbies and sends turn emails. It does **not** poll on a fixed beat. After each
+pass it works out when something will next need doing and sleeps until then:
+
+- **the earliest deadline** of an open turn (`store.nextTurnDeadline()`), plus 25 ms, so a turn is resolved when its deadline arrives rather than up to a minute later;
+- **the next turn-email reminder** falling due, or a **retry** when mail is waiting (1 minute if a pass was cut short by its per-pass limit, 10 minutes under the daily cap,
+  5 minutes if the mail server refused);
+- **the next hourly look** for abandoned lobbies (only if that cleanup is on);
+- **a 60-second retry** if something failed (a turn that would not resolve, an AI that could not move, the deadline lookup itself);
+- and **never longer than `WORKER_INTERVAL_MS`** (default 5 minutes, was a fixed 1-minute beat). That is a safety net: it catches anything that changes the game without telling the
+  worker, and it is regular traffic to a database that sleeps when idle. If your database needs more frequent activity to stay awake, lower it (60000 gives the old rhythm).
+
+Things that can bring the next wake-up **forward** poke the worker: a game starting, a turn resolving, someone turning on turn emails (the app calls `worker.poke()`; a burst of pokes
+costs one pass 50 ms later, and a poke during a pass makes the pass plan another straight away). The server also pokes once at startup, so turns that came due while it was down
+(or while a free-tier host had it asleep) are resolved immediately instead of after the first sleep. Passes never overlap, and `stop()` waits for one in flight.
+
+The in-memory store now runs transactions one at a time. They work on a copy and replace the data when they finish, so two at once used to lose whichever finished first; the worker
+waking on events made that likelier, and PostgreSQL has row locks for it anyway. (A transaction must not start another on the same store from inside itself.)
+
 ## Turn emails (opt-in)
 
 Players can ask for two kinds of email, from a checkbox on their home page (**off until they turn it on**; only accounts that signed in with an
@@ -106,8 +136,7 @@ email address can):
 How it behaves:
 
 - **Each mail goes out at most once** per person, game, turn and kind (`turn_notifications`, migration 009). The server records the mail *before* handing it to
-  the mail provider, so two workers can never both send it. If the provider refuses, the record is removed and the next pass (about a minute later) tries
-  again; a crash in the instant between record and send loses that one mail rather than sending it twice.
+  the mail provider, so two workers can never both send it. If the provider refuses, the record is removed and the worker tries again about five minutes later; a crash in the instant between record and send loses that one mail rather than sending it twice.
 - **Never** sent to someone who did not opt in, for a turn whose deadline has passed, to someone who already submitted, to an eliminated or forfeited
   player, or to an AI player.
 - **Caps for a free mail plan:** at most `NOTIFY_DAILY_LIMIT` mails (default 150) in any rolling 24 hours and 40 per worker pass. Mailjet's free plan allows

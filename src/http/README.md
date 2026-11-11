@@ -76,11 +76,12 @@ DATABASE_URL=postgres://... AUTH_SECRET=<16+ random chars> APP_URL=https://... S
 | `NOTIFY_REMINDER_HOURS` | 4 | how long before a deadline the opt-in reminder email goes out, 0 to 72; `0` = no reminders |
 | `NOTIFY_DAILY_LIMIT` | 150 | turn emails in any rolling 24 hours, 0 to 100000; `0` = no cap. Keep it below the mail plan's daily allowance minus sign-in links (Mailjet free: 200 in total) |
 | `TRUST_PROXY` | off | `true` only behind a reverse proxy you control: client addresses for rate limits come from `X-Forwarded-For` |
+| `ABANDONED_LOBBY_DAYS` | 14 | a lobby nobody has joined for this many days is removed by the worker (checked hourly), 0 to 365; `0` = never. Started games are never removed |
 | `MAX_OPEN_GAMES_PER_USER` | 3 | unfinished games (lobby or running) one person may have created at once, 0 to 100; `0` = no limit |
 | `CLIENT_IP_HEADER` | | a header the proxy fills with the visitor's address, e.g. `cf-connecting-ip` on Render. Wins over `TRUST_PROXY`; values that are not IP addresses are ignored |
 | `NODE_ENV` | | `production` makes the server refuse the console mail transport and a non-https `APP_URL` |
 | `CORS_ORIGIN` | none | one allowed browser origin |
-| `WORKER_INTERVAL_MS` | 60000 | how often overdue turns are resolved |
+| `WORKER_INTERVAL_MS` | 300000 | the longest the deadline worker ever sleeps (10 to 3600000). It wakes when the next turn deadline, reminder or retry falls due, so this is only the safety net between those; lower it if your database needs more frequent traffic to stay awake |
 | `SHUTDOWN_GRACE_MS` | 5000 | how long open connections (such as event streams) get before being cut on shutdown |
 | `STORE=memory` | postgres | throwaway in-memory server; prints a warning. Development only |
 

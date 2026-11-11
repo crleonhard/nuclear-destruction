@@ -12,7 +12,7 @@ export async function openStore() {
     const { createPgStore } = await import('../../src/store/postgres.js');
     const pool = new pg.Pool({ connectionString: url, max: 4 });
     const store = createPgStore(pool);
-    return { kind: 'postgres', makeStore: () => store, close: () => pool.end() };
+    return { kind: 'postgres', makeStore: () => store, pool, close: () => pool.end() };
   }
   if (process.env.ND_SHARED_MEMORY) {
     const store = createMemoryStore();

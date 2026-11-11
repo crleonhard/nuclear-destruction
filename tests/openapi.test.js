@@ -131,7 +131,7 @@ const scenario = (name, a, b) => {
 
 const exercised = new Set(); // "METHOD /path status", shared across boots
 
-async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 60_000 }, email = false, authLimit, mailer = createMemoryMailer(), maxOpenGamesPerUser = 0, turnEmails = false } = {}) {
+async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 60_000 }, email = false, authLimit, mailer = createMemoryMailer(), maxOpenGamesPerUser = 0, turnEmails = false, abandonedLobbyDays = 0 } = {}) {
   const clock = { t: new Date('2026-11-01T00:00:00Z') };
   const now = () => clock.t;
   const store = stores.makeStore();
@@ -139,7 +139,7 @@ async function boot({ allowSignup = true, writeLimit = { max: 10_000, windowMs: 
   const logger = { error() {} };
   const login = email ? createEmailLogin({ store, mailer, auth, appUrl: 'http://localhost:3000', now, logger }) : null;
   const notifications = turnEmails ? createNotifications({ store, mailer, secret: 'a-test-secret-that-is-long-enough', appUrl: 'http://localhost:3000', now, logger }) : null;
-  const app = createApp({ store, auth, now, allowSignup, writeLimit, login, notifications, authLimit, maxOpenGamesPerUser, logger });
+  const app = createApp({ store, auth, now, allowSignup, writeLimit, login, notifications, authLimit, maxOpenGamesPerUser, abandonedLobbyDays, logger });
   const server = await app.listen(0, '127.0.0.1');
   const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -504,6 +504,17 @@ scenario('conformance: account basics (rename, sign out everywhere, delete) matc
     assert.equal(seat.displayName, 'Former player');
     assert.ok(['HAWK', 'DIPLOMAT', 'OPPORTUNIST'].includes(seat.ai), 'an AI player took her seat in the running game');
   } finally { await ctx.close(); }
+});
+
+scenario('conformance: the lobby view says whether idle lobbies are removed, and after how many days', async () => {
+  for (const days of [0, 14]) {
+    const ctx = await boot({ abandonedLobbyDays: days });
+    try {
+      const ann = await ctx.signup('Ann');
+      const id = (await ctx.call(ann.token, 'POST', G, { body: { aiPlayers: 0 } })).body.gameId;
+      assert.equal((await ctx.call(ann.token, 'GET', P('lobby'), { id })).body.game.limits.abandonedAfterDays, days);
+    } finally { await ctx.close(); }
+  }
 });
 
 scenario('conformance: AI players in the lobby match the spec', async () => {

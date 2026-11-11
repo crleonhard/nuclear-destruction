@@ -3,12 +3,12 @@
 // It is an ordinary in-memory server with email sign-in switched on (no name sign-up), except that:
 //   * the mailer is replaced by one that keeps every message, so the browser test can read the sign-in and turn emails
 //     (nothing is sent anywhere);
-//   * the deadline worker is parked (it would only wake once an hour), and the test runs a pass when it wants one, so
-//     turn emails appear exactly when the test expects them instead of racing with what the browsers are doing.
+//   * the worker's longest sleep is an hour, so only what the app asks for (it wakes the worker when a game starts or a turn
+//     resolves) makes it run during the test. Turn emails therefore go out on their own a moment after a game starts, as in real use.
 //
 // A second, tiny control server on its own port lets the Python test reach both:
 //   GET  /mails   every message sent so far: [{ to, subject, text }]
-//   POST /tick    runs one worker pass (turn emails go out in it) and answers { sent, waiting, failed }
+//   POST /tick    runs one worker pass right now (a pass that finds nothing new is harmless) and answers when it is done
 import http from 'node:http';
 import net from 'node:net';
 import { startServer } from '../../src/server.js';

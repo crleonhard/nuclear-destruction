@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { openStore, labelFor } from './support/stores.js';
 import { createGame, joinGame } from '../src/app/lobby.js';
 import { startGame, submitSheet } from '../src/app/pipeline.js';
-import { createNotifications, createUnsubscribeTokens, planNotifications, composeMail } from '../src/app/notifications.js';
+import { createNotifications, createUnsubscribeTokens, planNotifications, composeMail, nextReminderAt } from '../src/app/notifications.js';
 import { createMemoryMailer } from '../src/mail/mailer.js';
 import { startWorker } from '../src/worker.js';
 
@@ -133,6 +133,23 @@ test('unsubscribe tokens: only the genuine token for a user verifies, and nothin
   const [, mac] = t.split('.');
   for (const bad of [null, undefined, 42, '', 'x', '42', '42.', `.${mac}`, `0.${mac}`, `042.${mac}`, `42.${mac}x`, `42.${mac.slice(1)}`, `${t} `, `-1.${mac}`]) assert.equal(tokens.verify(bad), null, String(bad));
   assert.throws(() => createUnsubscribeTokens({ secret: 'short' }), /at least 16/);
+});
+
+test('next reminder: the earliest reminder still to come; none when switched off, already sent, or already due', () => {
+  const c = candidate();                                                          // opens day 2 00:00, deadline day 3 00:00: the reminder is due at day 2 20:00
+  const at = (h) => new Date(c.opensAt.getTime() + h * HOUR);
+  const reminder = at(20).getTime();
+  assert.equal(nextReminderAt([c], at(1)), reminder);
+  assert.equal(nextReminderAt([c], at(1), { reminderHours: 0 }), null, 'switched off');
+  assert.equal(nextReminderAt([c], at(20)), null, 'exactly due now: it is in this pass\'s plan, not "next"');
+  assert.equal(nextReminderAt([c], at(22)), null, 'already due');
+  assert.equal(nextReminderAt([c], at(24)), null, 'the deadline has passed');
+  assert.equal(nextReminderAt([{ ...c, sentKinds: ['DEADLINE_SOON'] }], at(1)), null, 'already sent');
+  const sooner = candidate({ userId: 2, deadlineAt: new Date('2040-01-02T12:00:00Z'), opensAt: new Date('2040-01-02T00:00:00Z') });
+  assert.equal(nextReminderAt([c, sooner], at(1)), Date.parse('2040-01-02T08:00:00Z'), 'the soonest of several');
+  const short = candidate({ deadlineAt: new Date('2040-01-02T03:00:00Z') });     // a 3-hour turn: the reminder lead is 1 hour
+  assert.equal(nextReminderAt([short], short.opensAt), Date.parse('2040-01-02T02:00:00Z'));
+  assert.equal(nextReminderAt([], at(1)), null);
 });
 
 // ───────────────────────── settings ─────────────────────────
@@ -298,6 +315,58 @@ scenario('failure: when the mail server refuses, nothing is lost: the pass stops
   assert.deepEqual(w.mailsTo(ann), []);
   await w.service.tick(w.at(0.1));
   assert.equal(w.mailsTo(ann).length, 1, 'the claim was released, so the mail is sent once the server recovers');
+});
+
+scenario('next wake-up: a pass tells the worker when to look again: the next reminder, or a retry when mail is waiting or refused', async () => {
+  const w = await world({ humans: 2, ai: 1, notify: { dailyLimit: 0 } });
+  const [ann, bob] = w.people;
+  await w.optIn(ann);
+  await w.start();
+  const deadline = w.at(24).getTime();
+  const first = await w.service.tick(w.at(0));
+  assert.equal(first.sent >= 1, true);
+  assert.equal(first.nextAt, w.at(20).getTime(), 'the "open" mail went out; the reminder is next (4 hours before the deadline)');
+  const quiet = await w.service.tick(w.at(5));
+  assert.equal(quiet.nextAt, w.at(20).getTime());
+  const reminded = await w.service.tick(w.at(21));
+  assert.equal(w.mailsTo(ann).length, 2);
+  assert.equal(reminded.nextAt, null, 'both mails sent: nothing more is coming for this turn');
+  assert.ok(deadline > w.at(21).getTime());
+
+  // a person who submitted needs no reminder, so nothing is coming for them
+  const w2 = await world({ humans: 2, ai: 1 });
+  await w2.optIn(w2.people[0]);
+  await w2.start();
+  await w2.service.tick(w2.at(0));
+  assert.equal((await submitSheet(w2.store, { gameId: w2.gameId, userId: w2.people[0].id, payload: {}, final: true }, w2.at(1))).ok, true);
+  assert.equal((await w2.service.tick(w2.at(2))).nextAt, null);
+  assert.ok(bob);
+});
+
+scenario('next wake-up: mail waiting under a limit asks for a retry: a minute if the pass was cut short, ten if the daily cap is the reason, five if the mail server refused', async () => {
+  const w = await world({ humans: 3, ai: 0, notify: { maxPerPass: 1, dailyLimit: 0 } });
+  for (const p of w.people) await w.optIn(p);
+  await w.start();
+  const cut = await w.service.tick(w.at(0));
+  assert.deepEqual([cut.sent, cut.waiting], [1, 2]);
+  assert.equal(cut.nextAt, w.at(0).getTime() + 60_000, 'the per-pass limit: carry on in a minute');
+
+  const w2 = await world({ humans: 2, ai: 1 });
+  for (const p of w2.people) await w2.optIn(p);
+  await w2.start();
+  const capped = createNotifications({ store: w2.store, mailer: w2.mailer, secret: SECRET, appUrl: APP_URL, now: () => w2.clock.t, logger: w2.logger, dailyLimit: 1 });
+  const partly = await capped.tick(w2.at(0));
+  assert.deepEqual([partly.sent, partly.waiting], [1, 1]);
+  assert.equal(partly.nextAt, w2.at(0).getTime() + 60_000, 'the pass sent what the cap allowed and will be back soon');
+  const blocked = await capped.tick(w2.at(0));
+  assert.deepEqual([blocked.sent, blocked.waiting], [0, 1]);
+  assert.equal(blocked.nextAt, w2.at(0).getTime() + 10 * 60_000, 'the daily cap is used up: nothing will change for a while');
+
+  const w3 = await world({ humans: 1, ai: 2 });
+  await w3.optIn(w3.people[0]);
+  await w3.start();
+  const down = createNotifications({ store: w3.store, mailer: { async send() { throw new Error('no'); } }, secret: SECRET, appUrl: APP_URL, now: () => w3.clock.t, logger: w3.logger });
+  assert.equal((await down.tick(w3.at(0))).nextAt, w3.at(0).getTime() + 5 * 60_000);
 });
 
 scenario('failure: a store error inside a pass is logged and swallowed, never thrown into the worker', async () => {
